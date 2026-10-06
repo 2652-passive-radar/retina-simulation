@@ -95,6 +95,15 @@ _REGIONAL_WAYPOINTS: dict[str, list[tuple[float, float]]] = {
         (34.4984, -81.9573),  # GRD Greenwood
         (35.7565, -81.6790),  # HKY Hickory
     ],
+    "yvr": [
+        (49.1947, -123.1839),  # YVR Vancouver International
+        (49.0743, -123.0069),  # ZBB Boundary Bay
+        (49.2149, -122.7093),  # YPK Pitt Meadows
+        (49.0253, -122.3600),  # YXX Abbotsford
+        (48.7928, -122.5380),  # BLI Bellingham
+        (48.6469, -123.4258),  # YYJ Victoria
+        (49.0550, -123.8699),  # YCD Nanaimo
+    ],
 }
 
 
@@ -1091,11 +1100,17 @@ class SimulationWorld:
         angle_diff = abs((bearing - node.beam_azimuth_deg + 180) % 360 - 180)
         return angle_diff <= node.beam_width_deg / 2
 
-    def generate_detections_for_node(self, node_id: str, timestamp_ms: int) -> dict:
+    def generate_detections_for_node(self, node_id: str, timestamp_ms: int, labels: list | None = None) -> dict:
         """Generate a detection frame for a specific node.
 
         Returns a frame dict: {timestamp, delay[], doppler[], snr[], adsb?[]}
         Only includes aircraft within the node's detection cone.
+
+        When ``labels`` is a list, one truth record per emitted detection is
+        appended to it, index-aligned with the frame's arrays: which object
+        made the echo (or that it is clutter) and its noise-free delay and
+        Doppler.  The frame itself is unchanged, so nothing extra reaches
+        the wire.
         """
         node = self.nodes.get(node_id)
         if node is None:
@@ -1153,12 +1168,23 @@ class SimulationWorld:
             # 0.1 µs base = GPS-disciplined SDR with proper FM cross-correlation
             # (achievable at SNR > 15 dB with 150 kHz FM bandwidth).
             noise_scale = max(0.5, 2.0 - (snr - 4) / 18)
+            delay_true, doppler_true = delay, doppler
             delay += random.gauss(0, 0.1 * noise_scale)
             doppler += random.gauss(0, 2.0 * noise_scale)
 
             delays.append(round(delay, 2))
             dopplers.append(round(doppler, 2))
             snrs.append(round(snr, 2))
+            if labels is not None:
+                labels.append(
+                    {
+                        "object_id": ac.object_id,
+                        "adsb_hex": ac.adsb_hex,
+                        "is_clutter": False,
+                        "delay_true": round(delay_true, 4),
+                        "doppler_true": round(doppler_true, 4),
+                    }
+                )
 
             # ADS-B entry.  A silent transponder gets exactly what a dark
             # aircraft gets — a None slot — so the outage is indistinguishable
@@ -1199,6 +1225,10 @@ class SimulationWorld:
             dopplers.append(round(random.uniform(node.doppler_min, node.doppler_max), 2))
             snrs.append(round(random.uniform(4, 8), 2))
             adsb_list.append(None)
+            if labels is not None:
+                labels.append(
+                    {"object_id": None, "adsb_hex": None, "is_clutter": True, "delay_true": None, "doppler_true": None}
+                )
 
         frame = {
             "timestamp": timestamp_ms,

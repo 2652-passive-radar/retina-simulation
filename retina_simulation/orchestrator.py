@@ -40,6 +40,7 @@ from retina_simulation.generator import (
     generate_fleet,
 )
 from retina_simulation.live_adsb import LiveAdsbClient
+from retina_simulation.recorder import RunRecorder
 from retina_simulation.tower_resolver import apply_tower_assignments, resolve_towers
 from retina_simulation.world import (
     MetroCell,
@@ -73,6 +74,8 @@ def _cells_to_metrocells(cell_dicts: list[dict]) -> list[MetroCell]:
                 core_lon=c["core_lon"],
                 radius_km=c.get("radius_km", 70.0),
                 ops_weight=c.get("ops_weight", 1.0),
+                arrival_bearings_deg=c.get("arrival_bearings_deg", []),
+                departure_bearings_deg=c.get("departure_bearings_deg", []),
             )
         )
     return cells
@@ -282,6 +285,8 @@ class FleetOrchestrator:
         }
         # Ground truth storage for validation
         self.ground_truth: list[dict] = []
+        # Set by main_async under --record; None means nothing is written.
+        self.recorder: RunRecorder | None = None
         # Auto-reconnect state: per-node earliest-retry timestamp and attempt count
         self._reconnect_next: dict[str, float] = {}
         self._reconnect_attempts: dict[str, int] = {}
@@ -582,6 +587,8 @@ class FleetOrchestrator:
 
                 # Record ground truth on every world step
                 self._record_ground_truth(timestamp_ms)
+                if self.recorder:
+                    self.recorder.truth(timestamp_ms, self.world.aircraft)
 
                 # Send frames only to nodes whose per-node cooldown has elapsed
                 now_t = time.monotonic()
@@ -591,9 +598,12 @@ class FleetOrchestrator:
                         continue
                     if now_t < next_send.get(node_id, 0.0):
                         continue
-                    frame = self.world.generate_detections_for_node(node_id, timestamp_ms)
+                    labels = [] if self.recorder else None
+                    frame = self.world.generate_detections_for_node(node_id, timestamp_ms, labels=labels)
                     if frame.get("delay"):  # only send non-empty frames
                         send_tasks.append(self._send_frame_to_node(node_id, frame))
+                    if self.recorder:
+                        self.recorder.frame(node_id, frame, labels, sent=bool(frame.get("delay")))
                     # Schedule next send regardless of whether frame was non-empty
                     next_send[node_id] = now_t + self.frame_interval
 
@@ -1323,10 +1333,18 @@ async def main_async(args):
     # Build shared simulation world
     orchestrator._build_world()
 
-    # Handle graceful shutdown
+    if args.record:
+        orchestrator.recorder = RunRecorder(args.record, all_nodes)
+        log.info("Recording frames and truth to %s", args.record)
+
+    # Handle graceful shutdown.  Windows event loops have no signal handlers;
+    # Ctrl+C there raises KeyboardInterrupt instead, which still ends the run.
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(orchestrator.stop()))
+        try:
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(orchestrator.stop()))
+        except NotImplementedError:
+            break
 
     # Connect all nodes
     await orchestrator.connect_all()
@@ -1437,6 +1455,9 @@ async def main_async(args):
         # Save ground truth
         if args.ground_truth_path:
             orchestrator.save_ground_truth(args.ground_truth_path)
+        if orchestrator.recorder:
+            orchestrator.recorder.close()
+            log.info("Recorded %d frames to %s", orchestrator.recorder.frames_written, args.record)
 
         await orchestrator.stop()
 
@@ -1509,6 +1530,13 @@ def main():
     )
     parser.add_argument(
         "--ground-truth-path", type=str, default="ground_truth.json", help="Path to save ground truth data"
+    )
+    parser.add_argument(
+        "--record",
+        type=str,
+        default="",
+        help="Directory to record every node frame with per-detection truth labels, "
+        "plus per-tick aircraft truth (see retina_simulation/recorder.py). Empty = off.",
     )
     parser.add_argument(
         "--metro",

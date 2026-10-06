@@ -213,6 +213,10 @@ _KNOWN_METROS = {
     "lax": {"name": "Los Angeles", "lat": 34.052, "lon": -118.244, "radius_nm": 80},
     "dfw": {"name": "Dallas-Fort Worth", "lat": 32.897, "lon": -97.038, "radius_nm": 80},
     "kc": {"name": "Kansas City", "lat": 39.298, "lon": -94.714, "radius_nm": 70},
+    # Vancouver.  No Canadian tower table exists, so generation here fails;
+    # use it with a site fleet (retina_simulation.site_fleet) for the YVR
+    # waypoint net and ADS-B area scoping.
+    "yvr": {"name": "Vancouver", "lat": 49.1947, "lon": -123.1839, "radius_nm": 50},
 }
 
 _NM_TO_KM = 1.852

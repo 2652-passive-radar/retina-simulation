@@ -5,3 +5,6 @@ dist/
 build/
 .venv/
 *.egg
+
+# Recorded simulation runs (tools/README.md)
+runs/

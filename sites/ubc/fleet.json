@@ -1,0 +1,105 @@
+{
+  "fleet": {
+    "site": "ubc",
+    "metro": "yvr"
+  },
+  "nodes": [
+    {
+      "node_id": "ubc-chan",
+      "rx_lat": 49.259323,
+      "rx_lon": -123.247566,
+      "rx_alt_ft": 318.2,
+      "tx_lat": 49.345,
+      "tx_lon": -122.972778,
+      "tx_alt_ft": 2024.0,
+      "fc_hz": 521000000,
+      "fs_hz": 2000000.0,
+      "beam_width_deg": 60.0,
+      "max_range_km": 60.0,
+      "region": "ca",
+      "tx_callsign": "CHAN-DT",
+      "beam_azimuth_deg": 147.0
+    },
+    {
+      "node_id": "ubc-cisf",
+      "rx_lat": 49.259323,
+      "rx_lon": -123.247566,
+      "rx_alt_ft": 318.2,
+      "tx_lat": 49.183889,
+      "tx_lon": -122.844722,
+      "tx_alt_ft": 636.5,
+      "fc_hz": 107700000,
+      "fs_hz": 2000000.0,
+      "beam_width_deg": 60.0,
+      "max_range_km": 60.0,
+      "region": "ca",
+      "tx_callsign": "CISF-FM",
+      "beam_azimuth_deg": 147.0
+    },
+    {
+      "node_id": "ubc-chek",
+      "rx_lat": 49.259323,
+      "rx_lon": -123.247566,
+      "rx_alt_ft": 318.2,
+      "tx_lat": 48.774528,
+      "tx_lon": -123.171111,
+      "tx_alt_ft": 1638.1,
+      "fc_hz": 485000000,
+      "fs_hz": 2000000.0,
+      "beam_width_deg": 60.0,
+      "max_range_km": 60.0,
+      "region": "ca",
+      "tx_callsign": "CHEK-DT",
+      "beam_azimuth_deg": 147.0
+    },
+    {
+      "node_id": "ubc-cisc",
+      "rx_lat": 49.259323,
+      "rx_lon": -123.247566,
+      "rx_alt_ft": 318.2,
+      "tx_lat": 49.344444,
+      "tx_lon": -123.386667,
+      "tx_alt_ft": 1171.3,
+      "fc_hz": 107500000,
+      "fs_hz": 2000000.0,
+      "beam_width_deg": 60.0,
+      "max_range_km": 60.0,
+      "region": "ca",
+      "tx_callsign": "CISC-FM",
+      "beam_azimuth_deg": 147.0
+    },
+    {
+      "node_id": "ubc-cbu1",
+      "rx_lat": 49.259323,
+      "rx_lon": -123.247566,
+      "rx_alt_ft": 318.2,
+      "tx_lat": 48.765639,
+      "tx_lon": -123.511306,
+      "tx_alt_ft": 2333.7,
+      "fc_hz": 92100000,
+      "fs_hz": 2000000.0,
+      "beam_width_deg": 60.0,
+      "max_range_km": 60.0,
+      "region": "ca",
+      "tx_callsign": "CBU-FM-1",
+      "beam_azimuth_deg": 147.0
+    }
+  ],
+  "cells": [
+    {
+      "ring_id": "ubc",
+      "core_lat": 49.1947,
+      "core_lon": -123.1839,
+      "radius_km": 60.0,
+      "ops_weight": 1.0,
+      "arrival_bearings_deg": [
+        263.0,
+        83.0
+      ],
+      "departure_bearings_deg": [
+        83.0,
+        263.0
+      ]
+    }
+  ]
+}
