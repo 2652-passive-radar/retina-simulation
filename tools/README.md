@@ -33,8 +33,15 @@ Window 1, backend (as usual):
 ```
 cd C:\Users\chase\retina-server\backend
 $env:RETINA_ENV = "dev"; $env:AUTH_ALLOW_ANONYMOUS_ADMIN = "1"; $env:SYNTHETIC_FLEET_ENABLED = "1"
+$env:NODE_FUZZ_MODE = "off"
 .\.venv\Scripts\uvicorn main:app --reload
 ```
+
+`NODE_FUZZ_MODE=off` makes the map show each receiver at its exact position.
+Without it the server shifts every published receiver 0.5–1 km for privacy,
+simulated ones included. Node ids must start with `synth-` for the server to
+treat a node as simulated: anything else is taken for unregistered hardware
+and kept off the map.
 
 Window 2, the UBC fleet, recording for 10 minutes:
 
@@ -73,5 +80,5 @@ Maps are about 230 kB a frame compressed (noise does not compress), so a
   the sim's SNR model dropped is absent, where a real map would still hold
   its sub-threshold energy. Targets beyond blah2's 205 µs delay window are
   listed with `in_grid: false` and not drawn.
-* All five UBC receivers share one rooftop placeholder and one beam, so they
+* All five UBC receivers share one rooftop (49°15'57.7"N 123°15'06.5"W) and one beam, so they
   see the same aircraft. Spread them out (real sites) for geometry diversity.

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from retina_simulation.site_fleet import build_site_fleet
+from retina_simulation.site_fleet import SYNTHETIC_PREFIX, build_site_fleet
 
 _TOWERS = {
     "towers": [
@@ -77,8 +77,9 @@ def test_every_unknown_tower_is_named():
 
 def test_checked_in_ubc_site_builds():
     root = Path(__file__).resolve().parent.parent / "sites" / "ubc"
-    site = json.loads((root / "site.json").read_text())
+    site = json.loads((root / "site.json").read_text(encoding="utf-8"))
     towers = json.loads((root / "towers.json").read_text(encoding="utf-8"))
     fleet = build_site_fleet(site, towers)
-    assert fleet == json.loads((root / "fleet.json").read_text())
+    assert fleet == json.loads((root / "fleet.json").read_text(encoding="utf-8"))
     assert all(n["node_id"].startswith(fleet["cells"][0]["ring_id"]) for n in fleet["nodes"])
+    assert all(n["node_id"].startswith(SYNTHETIC_PREFIX) for n in fleet["nodes"])

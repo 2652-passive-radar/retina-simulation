@@ -13,10 +13,10 @@ Site file::
       "name": "ubc",
       "metro": "yvr",
       "defaults": {"rx_alt_m": 90, "beam_width_deg": 60, "max_range_km": 60},
-      "cells": [{"ring_id": "ubc", "core_lat": 49.1947, "core_lon": -123.1839,
+      "cells": [{"ring_id": "synth-ubc", "core_lat": 49.1947, "core_lon": -123.1839,
                  "radius_km": 60, "arrival_bearings_deg": [263, 83]}],
       "nodes": [
-        {"node_id": "ubc-1", "rx_lat": 49.2606, "rx_lon": -123.2460,
+        {"node_id": "synth-ubc-1", "rx_lat": 49.266028, "rx_lon": -123.251806,
          "tower": "CBUT-DT", "beam_azimuth_deg": 150}
       ]
     }
@@ -36,6 +36,10 @@ import json
 import sys
 
 _M_TO_FT = 3.28084
+# The backend recognises a simulated node by this id prefix (is_synthetic_node
+# in retina-server); without it a node is treated as unregistered hardware and
+# dropped from the public node list and the map.
+SYNTHETIC_PREFIX = "synth-"
 
 
 def _tower_index(towers_doc: dict) -> dict[str, dict]:
@@ -105,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--output", default="fleet_config.json")
     args = parser.parse_args(argv)
 
-    with open(args.site) as f:
+    with open(args.site, encoding="utf-8") as f:
         site = json.load(f)
     with open(args.towers, encoding="utf-8") as f:
         towers_doc = json.load(f)
@@ -114,8 +118,15 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    with open(args.output, "w") as f:
+    with open(args.output, "w", encoding="utf-8") as f:
         json.dump(fleet, f, indent=2)
+    unprefixed = [n["node_id"] for n in fleet["nodes"] if not n["node_id"].startswith(SYNTHETIC_PREFIX)]
+    if unprefixed:
+        print(
+            f"warning: {', '.join(unprefixed)} do not start with {SYNTHETIC_PREFIX!r}; the server will take them "
+            "for unregistered hardware and keep them off the map",
+            file=sys.stderr,
+        )
     for n in fleet["nodes"]:
         print(f"{n['node_id']}: {n['tx_callsign']} {n['fc_hz'] / 1e6:.1f} MHz @ ({n['tx_lat']:.4f}, {n['tx_lon']:.4f})")
     print(f"wrote {args.output} ({len(fleet['nodes'])} nodes, {len(fleet['cells'])} cells)")
