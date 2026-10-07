@@ -1,6 +1,7 @@
-"""Run recorder: writes what the fleet sent, and the truth behind it, to disk.
+"""Run recorder: writes what the fleet sent, the truth behind it, and what the
+server made of it, to disk.
 
-Enabled with ``orchestrator --record DIR``.  Three files, all append-only so a
+Enabled with ``orchestrator --record DIR``.  Four files, all append-only so a
 run killed mid-way still leaves everything up to that point readable:
 
 ``nodes.json``
@@ -13,6 +14,10 @@ run killed mid-way still leaves everything up to that point readable:
 ``truth.ndjson``
     One line per world tick: every aircraft's absolute state, including the
     dark ones the ADS-B push leaves out.
+``solves.ndjson``
+    Every solver outcome the server records at ``/api/test/mlat-history``,
+    each kept once.  Read every 15 s while the run lasts (the server keeps
+    about 30 minutes), when the orchestrator has a ``--validation-url``.
 
 Nothing here touches the wire.  The labels are produced alongside the frame
 by ``SimulationWorld.generate_detections_for_node(labels=...)`` and only ever
@@ -21,6 +26,26 @@ reach this file.
 
 import json
 import os
+import urllib.request
+
+_SOLVES_PATH = "/api/test/mlat-history?all=1&limit=5000"
+
+
+def fetch_solves(base_url: str, radar_key: str | None = None) -> list[dict]:
+    """The server's current solve history.  A dev backend started with
+    AUTH_ALLOW_ANONYMOUS_ADMIN=1 needs no key; otherwise RADAR_API_KEY."""
+    headers = {"User-Agent": "Mozilla/5.0 retina-sim-recorder"}
+    key = radar_key or os.getenv("RADAR_API_KEY")
+    if key:
+        headers["X-API-Key"] = key
+    req = urllib.request.Request(base_url.rstrip("/") + _SOLVES_PATH, headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        doc = json.loads(resp.read())
+    return doc.get("records", [])
+
+
+def _solve_id(rec: dict) -> tuple:
+    return (rec.get("ts_ms"), rec.get("solve_key"), rec.get("outcome"), rec.get("solver_hex"))
 
 
 def _detections(frame: dict, labels: list[dict]) -> list[dict]:
@@ -73,6 +98,8 @@ class RunRecorder:
         # a killed run still leaves every complete line on disk.
         self._frames = open(os.path.join(out_dir, "frames.ndjson"), "a", buffering=1, encoding="utf-8")  # noqa: SIM115
         self._truth = open(os.path.join(out_dir, "truth.ndjson"), "a", buffering=1, encoding="utf-8")  # noqa: SIM115
+        self._solves = open(os.path.join(out_dir, "solves.ndjson"), "a", buffering=1, encoding="utf-8")  # noqa: SIM115
+        self._solves_seen: set[tuple] = set()
         self.frames_written = 0
 
     def frame(self, node_id: str, frame: dict, labels: list[dict], sent: bool) -> None:
@@ -92,6 +119,19 @@ class RunRecorder:
         rec = {"t_ms": timestamp_ms, "aircraft": [aircraft_state(ac) for ac in aircraft]}
         self._truth.write(json.dumps(rec) + "\n")
 
+    def solves(self, records: list[dict]) -> int:
+        """Append the records not yet written; returns how many were new."""
+        new = 0
+        for rec in sorted(records, key=lambda r: r.get("ts_ms") or 0):
+            rid = _solve_id(rec)
+            if rid in self._solves_seen:
+                continue
+            self._solves_seen.add(rid)
+            self._solves.write(json.dumps(rec) + "\n")
+            new += 1
+        return new
+
     def close(self) -> None:
         self._frames.close()
         self._truth.close()
+        self._solves.close()

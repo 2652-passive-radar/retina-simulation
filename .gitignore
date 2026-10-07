@@ -8,3 +8,4 @@ build/
 
 # Recorded simulation runs (tools/README.md)
 runs/
+ground_truth.json

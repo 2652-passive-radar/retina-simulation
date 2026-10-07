@@ -104,3 +104,14 @@ def test_recorder_writes_residuals_and_truth(tmp_path):
 
 def test_ubc_receiver_beam_reaches_yvr():
     assert abs(_bearing_deg(_RX_LAT, _RX_LON, 49.1947, -123.1839) - 147.2) < 0.5
+
+
+def test_recorder_keeps_each_solve_once(tmp_path):
+    rec = RunRecorder(str(tmp_path), [])
+    a = {"ts_ms": 2, "solve_key": "mn-dark-1", "outcome": "published", "solver_hex": "mn1"}
+    b = {"ts_ms": 1, "solve_key": "mn-dark-2", "outcome": "n2_unconfirmed", "solver_hex": None}
+    assert rec.solves([a, b]) == 2
+    assert rec.solves([a, b, {**a, "ts_ms": 3}]) == 1
+    rec.close()
+    lines = [json.loads(line) for line in (tmp_path / "solves.ndjson").read_text().splitlines()]
+    assert [r["ts_ms"] for r in lines] == [1, 2, 3]

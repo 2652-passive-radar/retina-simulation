@@ -40,7 +40,7 @@ from retina_simulation.generator import (
     generate_fleet,
 )
 from retina_simulation.live_adsb import LiveAdsbClient
-from retina_simulation.recorder import RunRecorder
+from retina_simulation.recorder import RunRecorder, fetch_solves
 from retina_simulation.tower_resolver import apply_tower_assignments, resolve_towers
 from retina_simulation.world import (
     MetroCell,
@@ -287,6 +287,9 @@ class FleetOrchestrator:
         self.ground_truth: list[dict] = []
         # Set by main_async under --record; None means nothing is written.
         self.recorder: RunRecorder | None = None
+        # Set under --adsb-truth-only: frames reach the server without their
+        # ADS-B tags, so every solve it makes is radar-only.
+        self.withhold_adsb = False
         # Auto-reconnect state: per-node earliest-retry timestamp and attempt count
         self._reconnect_next: dict[str, float] = {}
         self._reconnect_attempts: dict[str, int] = {}
@@ -601,7 +604,8 @@ class FleetOrchestrator:
                     labels = [] if self.recorder else None
                     frame = self.world.generate_detections_for_node(node_id, timestamp_ms, labels=labels)
                     if frame.get("delay"):  # only send non-empty frames
-                        send_tasks.append(self._send_frame_to_node(node_id, frame))
+                        wire = {k: v for k, v in frame.items() if k != "adsb"} if self.withhold_adsb else frame
+                        send_tasks.append(self._send_frame_to_node(node_id, wire))
                     if self.recorder:
                         self.recorder.frame(node_id, frame, labels, sent=bool(frame.get("delay")))
                     # Schedule next send regardless of whether frame was non-empty
@@ -1104,6 +1108,23 @@ async def _poll_simulation_config(
             log.debug("Config poll failed: %s", e)
 
 
+async def _record_solves_live(orchestrator: FleetOrchestrator, base_url: str, interval_s: float = 15.0):
+    """Copy the server's solve history into the run recording while it runs.
+
+    The server keeps about 30 minutes of solves; polling every 15 s and
+    keeping each record once means a run of any length is kept whole.
+    """
+    loop = asyncio.get_event_loop()
+    while orchestrator._running:
+        await asyncio.sleep(interval_s)
+        try:
+            records = await loop.run_in_executor(None, fetch_solves, base_url)
+            new = orchestrator.recorder.solves(records)
+            log.debug("Recorded %d new solves", new)
+        except Exception as exc:
+            log.warning("Solve read failed: %s", exc)
+
+
 async def _push_adsb_live(
     orchestrator: FleetOrchestrator,
     base_url: str,
@@ -1333,9 +1354,18 @@ async def main_async(args):
     # Build shared simulation world
     orchestrator._build_world()
 
+    if args.adsb_truth_only:
+        # Every aircraft carries ADS-B, but only the recording and the map's
+        # truth dots see it: frames go out untagged and no ADS-B is pushed,
+        # so the server solves every aircraft from radar alone.
+        world = orchestrator.world
+        world.frac_dark = world.frac_drone = world.frac_anomalous = world.frac_adsb_outage = 0.0
+        orchestrator.withhold_adsb = True
+        log.info("ADS-B kept from the server: all solves will be radar-only")
+
     if args.record:
         orchestrator.recorder = RunRecorder(args.record, all_nodes)
-        log.info("Recording frames and truth to %s", args.record)
+        log.info("Recording frames, truth and server solves to %s", args.record)
 
     # Handle graceful shutdown.  Windows event loops have no signal handlers;
     # Ctrl+C there raises KeyboardInterrupt instead, which still ends the run.
@@ -1361,7 +1391,7 @@ async def main_async(args):
 
     # Always push per-aircraft ADS-B positions every second so every aircraft
     # has a fresh position in state.adsb_aircraft regardless of node visibility.
-    if args.validation_url:
+    if args.validation_url and not orchestrator.withhold_adsb:
         tasks.append(
             _push_adsb_live(
                 orchestrator,
@@ -1382,7 +1412,9 @@ async def main_async(args):
         )
 
     # Poll server for updated simulation physics fractions (set from frontend UI).
-    if args.validation_url:
+    # Not under --adsb-truth-only: that scene is fixed by the command line, and
+    # the dashboard's sliders could otherwise add dark aircraft or restart it.
+    if args.validation_url and not orchestrator.withhold_adsb:
         tasks.append(
             _poll_simulation_config(
                 orchestrator,
@@ -1440,6 +1472,9 @@ async def main_async(args):
     elif adsb_metros and args.validation_url and not live_seeding:
         log.info("Real ADS-B relay disabled (pass --real-adsb to inject adsb.lol traffic)")
 
+    if orchestrator.recorder and args.validation_url:
+        tasks.append(_record_solves_live(orchestrator, args.validation_url))
+
     if args.validate and args.validation_url:
         tasks.append(
             _validate_against_server(
@@ -1456,6 +1491,12 @@ async def main_async(args):
         if args.ground_truth_path:
             orchestrator.save_ground_truth(args.ground_truth_path)
         if orchestrator.recorder:
+            if args.validation_url:
+                # One last read, for the solves made since the final poll.
+                try:
+                    orchestrator.recorder.solves(fetch_solves(args.validation_url))
+                except Exception as exc:
+                    log.warning("Final solve read failed: %s", exc)
             orchestrator.recorder.close()
             log.info("Recorded %d frames to %s", orchestrator.recorder.frames_written, args.record)
 
@@ -1532,6 +1573,12 @@ def main():
         "--ground-truth-path", type=str, default="ground_truth.json", help="Path to save ground truth data"
     )
     parser.add_argument(
+        "--adsb-truth-only",
+        action="store_true",
+        help="Give every aircraft ADS-B but keep it from the server (untagged frames, no ADS-B push, "
+        "no dashboard physics polling), so every server solve is radar-only. Implies --mode adsb.",
+    )
+    parser.add_argument(
         "--record",
         type=str,
         default="",
@@ -1591,6 +1638,8 @@ def main():
         help="Fraction of spawns routed through metro coverage rings (rest en-route)",
     )
     args = parser.parse_args()
+    if args.adsb_truth_only:
+        args.mode = "adsb"
 
     asyncio.run(main_async(args))
 

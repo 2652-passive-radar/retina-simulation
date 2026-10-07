@@ -2,13 +2,13 @@
   "name": "ubc",
   "metro": "yvr",
   "region": "ca",
-  "notes": "All receivers share one rooftop at 49°15'57.7\"N 123°15'06.5\"W (UBC). Each uses a different illuminator so the bistatic ellipses differ. Beams aim at YVR (148 deg, 9.3 km). Node ids start with synth- so the server treats them as simulated and shows them on the map.",
+  "notes": "Three receivers share one rooftop at 49°15'57.7\"N 123°15'06.5\"W (UBC), each on a different illuminator so the bistatic ellipses differ. Beams aim at YVR (148 deg, 9.3 km) and are 120 deg wide, and YVR traffic is held within 40 km, so a three-aircraft scene stays in view about 97% of the time. Node ids start with synth- so the server treats them as simulated and shows them on the map.",
   "defaults": {
     "rx_lat": 49.266028,
     "rx_lon": -123.251806,
     "rx_alt_m": 97.0,
     "beam_azimuth_deg": 148.0,
-    "beam_width_deg": 60.0,
+    "beam_width_deg": 120.0,
     "max_range_km": 60.0
   },
   "cells": [
@@ -16,7 +16,7 @@
       "ring_id": "synth-ubc",
       "core_lat": 49.1947,
       "core_lon": -123.1839,
-      "radius_km": 60.0,
+      "radius_km": 40.0,
       "ops_weight": 1.0,
       "arrival_bearings_deg": [
         263.0,
@@ -34,20 +34,12 @@
       "tower": "CHAN-DT"
     },
     {
-      "node_id": "synth-ubc-cisf",
-      "tower": "CISF-FM"
-    },
-    {
       "node_id": "synth-ubc-chek",
       "tower": "CHEK-DT"
     },
     {
       "node_id": "synth-ubc-cisc",
       "tower": "CISC-FM"
-    },
-    {
-      "node_id": "synth-ubc-cbu1",
-      "tower": "CBU-FM-1"
     }
   ]
 }

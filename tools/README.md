@@ -1,34 +1,30 @@
-# Recording a simulated run for error analytics
+# Recording a simulated run
 
-Four steps: run the server, run a site fleet with `--record`, record the
-server's solves next to it, then analyse and render maps. Everything lands in
-one run directory.
+Two commands: one records a run, one turns it into tables and maps.
 
-| File | Written by | Holds |
-|---|---|---|
-| `nodes.json` | orchestrator | the node configs used (RX, tower, frequency, beam) |
-| `frames.ndjson` | orchestrator | every node frame: measured delay (µs) / Doppler (Hz) / SNR per detection, with its truth label (object id or clutter), noise-free delay/Doppler and the residual |
-| `truth.ndjson` | orchestrator | every aircraft's absolute state each tick (lat, lon, alt, ENU velocity, ADS-B status, dark/anomalous), dark ones included |
-| `solves.ndjson` | `record_solves.py` | every server solve: state guess, fit residuals, node count, outcome |
-| `analysis/*.csv` | `analyze_run.py` | per detection, per node/tower, per target, and per solve with the localisation error vector (east/north/up m) |
-| `maps/*.npz` | `render_maps.py` | labelled delay-Doppler maps on blah2's 301 × 411 grid |
+## The scene (`sites/ubc/`)
 
-## Choosing nodes and towers
+* **3 receivers** on one UBC rooftop (49°15'57.7"N 123°15'06.5"W), each on a
+  different real tower: CHAN-DT (TV, 521 MHz, ENE), CHEK-DT (TV, 485 MHz, S)
+  and CISC-FM (FM, 107.5 MHz, NW). Beams aim at YVR, 120° wide.
+* **3 aircraft**, all with ADS-B, flying in and out of YVR within 40 km, so
+  at least one is in view about 97% of the time.
+* `--adsb-truth-only` keeps the ADS-B from the server: it solves every aircraft
+  from radar alone, and the ADS-B is kept as the truth to score it against.
 
-A site file places receivers and names each one's illuminator by callsign out
-of a towers.retina.fm search saved as JSON (`sites/ubc/` is the worked
-example). To change towers, edit `site.json` and rebuild:
+To change towers or the receiver position, edit `sites/ubc/site.json` (any
+callsign in `towers.json`) and rebuild:
 
 ```
 python -m retina_simulation.site_fleet sites/ubc/site.json sites/ubc/towers.json -o sites/ubc/fleet.json
 ```
 
-For a new area, save `https://towers.retina.fm/api/towers?lat=..&lon=..&radius_km=80&limit=50&source=auto`
-as `towers.json`. A cell's `ring_id` must prefix its node ids.
+Node ids must start with `synth-`, or the server treats them as hardware and
+keeps them off the map.
 
-## Windows (PowerShell), from the retina-server checkout
+## Windows (PowerShell)
 
-Window 1, backend (as usual):
+Window 1, backend:
 
 ```
 cd C:\Users\chase\retina-server\backend
@@ -37,48 +33,67 @@ $env:NODE_FUZZ_MODE = "off"
 .\.venv\Scripts\uvicorn main:app --reload
 ```
 
-`NODE_FUZZ_MODE=off` makes the map show each receiver at its exact position.
-Without it the server shifts every published receiver 0.5–1 km for privacy,
-simulated ones included. Node ids must start with `synth-` for the server to
-treat a node as simulated: anything else is taken for unregistered hardware
-and kept off the map.
-
-Window 2, the UBC fleet, recording for 10 minutes:
+Window 2, the run (10 minutes; it stops by itself and also records the
+server's solves):
 
 ```
 cd C:\Users\chase\retina-server\libs\retina-simulation
 $env:PYTHONUTF8 = "1"
-..\..\backend\.venv\Scripts\python.exe -m retina_simulation.orchestrator --config sites\ubc\fleet.json --metro yvr --mode adsb --interval 0.5 --min-aircraft 25 --max-aircraft 35 --seed 42 --duration 600 --record runs\ubc-1
+..\..\backend\.venv\Scripts\python.exe -m retina_simulation.orchestrator --config sites\ubc\fleet.json --metro yvr --adsb-truth-only --metro-traffic-frac 1.0 --min-aircraft 3 --max-aircraft 3 --seed 42 --duration 600 --record runs\ubc-1
 ```
 
-Window 3, the server's solves, started straight after the fleet connects:
+Optional window 3, the map: `npm run dev -w dashboard` from
+`C:\Users\chase\retina-server`, open http://localhost:5174/map and press
+**Raw**. It then shows only the ADS-B truth dots, each node's delay arcs and
+the radar-only solves.
 
-```
-cd C:\Users\chase\retina-server\libs\retina-simulation
-..\..\backend\.venv\Scripts\python.exe tools\record_solves.py --out runs\ubc-1 --duration 630
-```
-
-Then:
+After the run:
 
 ```
 ..\..\backend\.venv\Scripts\python.exe tools\analyze_run.py runs\ubc-1
-..\..\backend\.venv\Scripts\python.exe tools\render_maps.py runs\ubc-1 --every 2
+..\..\backend\.venv\Scripts\python.exe tools\view_maps.py runs\ubc-1
 ```
 
-Maps are about 230 kB a frame compressed (noise does not compress), so a
-10-minute 5-node run is about 700 MB at `--every 1`. `--every` and
-`--max-frames` trim it.
+## What you get (`runs\ubc-1\analysis\` and `runs\ubc-1\maps\`)
 
-## What the numbers are, and are not
+| File | For | Holds |
+|---|---|---|
+| `detections.csv` | ML | every detection: delay (µs), Doppler (Hz), SNR, label (aircraft id or `clutter`), true delay/Doppler, residuals (measured − true) |
+| `maps\maps_*.npz` + `index.json` | ML | one delay-Doppler map per node per second, with a label mask (which pixels are which aircraft) |
+| `solves.csv` | moving receiver | each radar-only solve: state guess (position, velocity), which aircraft it was, that aircraft's ADS-B state, error vector (east/north/up m) |
+| `aircraft.csv` | moving receiver | each aircraft's ADS-B state every second |
+| `summary.txt` | everyone | headline numbers |
 
-* Residuals are the sim's measurement noise model (measured minus the
-  noise-free value), not a radar's: they check what the solver is fed.
-* The localisation error is the solve minus truth interpolated to the
-  measurement time. `err_up_m` is only meaningful where `altitude_mode` is
-  not `pinned` (dark-lane solves pin altitude).
-* Maps draw only the targets the sim reported. An aircraft in the beam that
-  the sim's SNR model dropped is absent, where a real map would still hold
-  its sub-threshold energy. Targets beyond blah2's 205 µs delay window are
-  listed with `in_grid: false` and not drawn.
-* All five UBC receivers share one rooftop (49°15'57.7"N 123°15'06.5"W) and one beam, so they
-  see the same aircraft. Spread them out (real sites) for geometry diversity.
+The raw recording (`frames.ndjson`, `truth.ndjson`, `solves.ndjson`,
+`nodes.json`) stays in the run folder in case the tables need rebuilding.
+
+## Maps
+
+There is one map per node per second. Each is blah2's grid: 301 Doppler bins
+(±300 Hz) × 411 delay bins (−5 to 200 µs). The files store only the aircraft
+and clutter peaks, not the noise, which keeps them small. Add noise when you
+load one:
+
+```python
+import numpy as np, sys
+sys.path.insert(0, "tools")
+from render_maps import with_noise
+z = np.load("runs/ubc-1/maps/maps_000.npz")
+map_db = with_noise(z["signal"][0])   # what the radar would show, in dB
+labels = z["instance"][0]             # 0 = background, k = k-th target in index.json
+```
+
+`tools\view_maps.py` saves PNGs to `maps\png\` to look at. Each image shows
+the map on the left and its labels on the right; the console says which
+colour is which aircraft. `--node synth-ubc-cisc` picks one node and
+`--count 30` takes more.
+
+## Limits
+
+* Residuals come from the sim's noise model, not a real radar.
+* Radar-only solves pin altitude, so `err_up_m` is not a solved quantity
+  (`alt_pinned` is true).
+* A map holds only the peaks the sim reported. An aircraft its detection
+  model missed leaves nothing, where a real map would still show a weak peak.
+* All receivers share one rooftop and one beam. Real, spread-out sites would
+  give better geometry.
