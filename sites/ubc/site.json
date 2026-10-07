@@ -2,7 +2,7 @@
   "name": "ubc",
   "metro": "yvr",
   "region": "ca",
-  "notes": "Three receivers share one rooftop at 49°15'57.7\"N 123°15'06.5\"W (UBC), each on a different illuminator so the bistatic ellipses differ. Beams aim at YVR (148 deg, 9.3 km) and are 120 deg wide, and YVR traffic is held within 40 km, so a three-aircraft scene stays in view about 97% of the time. Node ids start with synth- so the server treats them as simulated and shows them on the map.",
+  "notes": "Three receivers share one rooftop at 49°15'57.7\"N 123°15'06.5\"W (UBC). Illuminators: CHAN-DT (DTV, ENE, the strongest in the search), CHEK-DT (DTV, S, the only DTV site outside Vancouver) and CISC-FM (FM, NW, the third direction no DTV site covers): about 110-140 deg apart around UBC. Beams aim at YVR (148 deg, 9.3 km) and are 120 deg wide, and YVR traffic is held within 40 km, so a three-aircraft scene stays in view about 97% of the time. Node ids start with synth- so the server treats them as simulated and shows them on the map.",
   "defaults": {
     "rx_lat": 49.266028,
     "rx_lon": -123.251806,

@@ -5,8 +5,10 @@ Two commands: one records a run, one turns it into tables and maps.
 ## The scene (`sites/ubc/`)
 
 * **3 receivers** on one UBC rooftop (49°15'57.7"N 123°15'06.5"W), each on a
-  different real tower: CHAN-DT (TV, 521 MHz, ENE), CHEK-DT (TV, 485 MHz, S)
-  and CISC-FM (FM, 107.5 MHz, NW). Beams aim at YVR, 120° wide.
+  different real tower: CHAN-DT (DTV, 521 MHz, ENE, the strongest), CHEK-DT
+  (DTV, 485 MHz, S) and CISC-FM (FM, 107.5 MHz, NW). The towers sit about
+  110–140° apart around UBC; every other DTV station in `towers.json` shares
+  CHAN-DT's direction. Beams aim at YVR, 120° wide.
 * **3 aircraft**, all with ADS-B, flying in and out of YVR within 40 km, so
   at least one is in view about 97% of the time.
 * `--adsb-truth-only` keeps the ADS-B from the server: it solves every aircraft
