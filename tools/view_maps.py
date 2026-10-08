@@ -33,6 +33,10 @@ _COLOURS = [
     ("yellow", (237, 161, 0)),
     ("pink", (232, 123, 164)),
     ("violet", (74, 58, 167)),
+    ("red", (227, 73, 72)),
+    ("cyan", (40, 190, 220)),
+    ("lime", (150, 210, 60)),
+    ("white", (235, 235, 235)),
 ]
 _CLUTTER = (120, 120, 120)
 _LOW, _HIGH = np.array([10, 18, 32.0]), np.array([225, 238, 255.0])
@@ -60,11 +64,17 @@ def picture(
     left = (_LOW + t * (_HIGH - _LOW)).astype(np.uint8)
     right = np.full(instance.shape + (3,), 24, np.uint8)
     key = {}
+    used = set()
     for tg in targets:
         if tg["label"] == "clutter":
             colour = _CLUTTER
         else:
+            # The run-wide colour, unless another aircraft in this image has it
+            # already (a long run has more aircraft than there are colours).
             name, colour = colours[tg["label"]]
+            if name in used:
+                name, colour = next((c for c in _COLOURS if c[0] not in used), (name, colour))
+            used.add(name)
             key[tg["label"]] = name
         right[instance == tg["k"]] = colour
     gap = np.full((instance.shape[0], 6, 3), 255, np.uint8)
