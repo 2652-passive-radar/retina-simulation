@@ -28,7 +28,7 @@ import math
 import os
 import statistics
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from render_maps import write_maps  # noqa: E402
@@ -228,7 +228,9 @@ def summary_text(nodes, dets, solves_all, solves, ac_rows, ticks, n_maps) -> str
         else:
             lines.append(f"  {n['node_id']} ({n['tx_callsign']}): no aircraft detections")
     radar_only = [s for s in solves_all if not s.get("known_lane") and not s.get("adsb_hex")]
-    lines.append(f"Radar-only solves: {len(solves)} published, {len(radar_only) - len(solves)} rejected by the server")
+    unpublished = Counter(s.get("outcome") for s in radar_only if not is_radar_only_published(s))
+    reasons = ", ".join(f"{k} {v}" for k, v in unpublished.most_common())
+    lines.append(f"Radar-only solves: {len(solves)} published, {sum(unpublished.values())} not published ({reasons})")
     err = [r["err_horiz_m"] for r in solves if r.get("err_horiz_m") is not None]
     if err:
         lines.append(
