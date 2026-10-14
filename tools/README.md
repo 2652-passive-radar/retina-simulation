@@ -115,12 +115,18 @@ flights with exactly the same detections. If the simulator ever stops
 reproducing them, the run stops and says which seed changed.
 
 Run everything with the backend's Python, which already has
-`retina_geolocator`. It also needs matplotlib, once:
+`retina_geolocator`. It also needs matplotlib, once. The backend's
+environment is made by uv and has no pip, so install with uv:
 
 ```
 cd "$root\backend"
-.\.venv\Scripts\python.exe -m pip install matplotlib
+uv pip install --python .venv matplotlib
 ```
+
+(Without uv: `.\.venv\Scripts\python.exe -m ensurepip` first, then
+`.\.venv\Scripts\python.exe -m pip install matplotlib`.) A later `uv sync`
+removes it again, since it is not in the backend's lock file; reinstall if the
+experiment reports `No module named 'matplotlib'`.
 
 where `$root` is your `retina-server` folder, e.g.
 `$root = "C:\Users\ericf\OneDrive\Documents\Year 5 Term 1\ENPH 479\2652-Passive-Radar\retina-server"`.
