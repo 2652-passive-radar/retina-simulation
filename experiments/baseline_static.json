@@ -1,0 +1,156 @@
+{
+  "name": "baseline-static",
+  "description": "Step 0 of the receiver-motion study: one aircraft, UBC site, receiver not moving. Seeds 101 and 202 fly straight legs, 303, 404 and 505 gentle constant turns.",
+  "fleet": "../sites/ubc/fleet.json",
+  "duration_s": 300,
+  "tick_s": 1.0,
+  "start_time_ms": 1767225600000,
+  "receiver_motion": {
+    "type": "static"
+  },
+  "coverage": {
+    "beam_margin_deg": 10.0,
+    "min_range_km": 3.0,
+    "max_range_km": 35.0,
+    "max_bistatic_angle_deg": 150.0
+  },
+  "flight_ranges": {
+    "speed_ms": [
+      70.0,
+      110.0
+    ],
+    "alt_m": [
+      1000.0,
+      3000.0
+    ],
+    "turn_rate_deg_s": [
+      0.3,
+      1.0
+    ]
+  },
+  "solver": {
+    "alt_mode": "sweep",
+    "alt_layers_km": [
+      1.5,
+      3.0,
+      5.0,
+      7.0,
+      9.0,
+      11.0
+    ],
+    "rms_delay_max_us": 3.0,
+    "rms_doppler_max_hz_n3": 60.0,
+    "rms_doppler_max_hz": 200.0,
+    "min_nodes": 3
+  },
+  "analysis": {
+    "rmse_window_s": 15
+  },
+  "runs": [
+    {
+      "seed": 101,
+      "flight": "straight",
+      "plan": {
+        "lat": 49.223005,
+        "lon": -122.855204,
+        "alt_m": 1092.214926,
+        "speed_ms": 80.06529,
+        "heading_deg": 219.654618,
+        "turn_rate_deg_s": 0.0
+      },
+      "fingerprint": {
+        "frames": 900,
+        "detections": 1980,
+        "target_detections": 663,
+        "sum_delay_us": 93848.6,
+        "sum_doppler_hz": 18397.57,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      }
+    },
+    {
+      "seed": 202,
+      "flight": "straight",
+      "plan": {
+        "lat": 49.20085,
+        "lon": -123.109083,
+        "alt_m": 1723.00979,
+        "speed_ms": 80.413865,
+        "heading_deg": 170.496836,
+        "turn_rate_deg_s": 0.0
+      },
+      "fingerprint": {
+        "frames": 900,
+        "detections": 2008,
+        "target_detections": 637,
+        "sum_delay_us": 81800.81,
+        "sum_doppler_hz": -47415.1,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      }
+    },
+    {
+      "seed": 303,
+      "flight": "turn",
+      "plan": {
+        "lat": 49.020958,
+        "lon": -123.032044,
+        "alt_m": 1552.81936,
+        "speed_ms": 101.583824,
+        "heading_deg": 292.722086,
+        "turn_rate_deg_s": 0.470634
+      },
+      "fingerprint": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77334.06,
+        "sum_doppler_hz": 40297.04,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      }
+    },
+    {
+      "seed": 404,
+      "flight": "turn",
+      "plan": {
+        "lat": 49.210978,
+        "lon": -123.201565,
+        "alt_m": 2170.625572,
+        "speed_ms": 106.928708,
+        "heading_deg": 52.095638,
+        "turn_rate_deg_s": 0.661929
+      },
+      "fingerprint": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71674.32,
+        "sum_doppler_hz": -54203.16,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      }
+    },
+    {
+      "seed": 505,
+      "flight": "turn",
+      "plan": {
+        "lat": 49.232845,
+        "lon": -123.007099,
+        "alt_m": 2695.781007,
+        "speed_ms": 105.442651,
+        "heading_deg": 101.25764,
+        "turn_rate_deg_s": 0.54356
+      },
+      "fingerprint": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 100312.52,
+        "sum_doppler_hz": -45368.07,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    }
+  ]
+}

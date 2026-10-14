@@ -16,6 +16,12 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+# tools/run_experiment.py and its figures (plus retina-geolocator, which the
+# backend's environment already has).
+analysis = [
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+]
 
 [tool.setuptools.packages.find]
 include = ["retina_simulation*"]

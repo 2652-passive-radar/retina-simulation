@@ -192,6 +192,9 @@ class SimulatedAircraft:
     # Waypoint navigation
     waypoints: list = field(default_factory=list)
     waypoint_idx: int = 0
+    # Constant turn (deg/s, positive = clockwise) for a scripted flight with
+    # no waypoints.  0.0 flies straight.
+    turn_rate_deg_s: float = 0.0
     # Mid-flight anomaly injection (scheduled event)
     anomaly_event: str | None = None  # None | "hijack" | "spoof" | "orbit" | "altitude_jump" | "id_swap"
     anomaly_trigger_at: float = 0.0  # world time when event fires
@@ -298,22 +301,75 @@ class MetroCell:
 # ── Coordinate helpers ────────────────────────────────────────────────────────
 
 
+# WGS84, the ellipsoid retina_geolocator solves on.  The echo geometry has to
+# be computed on the same Earth the solver assumes: a spherical flat-Earth
+# frame here put noise-free solves ~65 m from truth at 20-30 km range (UBC,
+# 2026-10), all of it model mismatch rather than anything a radar would see.
+_WGS84_A_KM = 6378.137
+_WGS84_E2 = 6.69437999014e-3
+
+
+def _lla_to_ecef(lat, lon, alt_km):
+    phi, lam = math.radians(lat), math.radians(lon)
+    s, c = math.sin(phi), math.cos(phi)
+    n = _WGS84_A_KM / math.sqrt(1.0 - _WGS84_E2 * s * s)
+    return (
+        (n + alt_km) * c * math.cos(lam),
+        (n + alt_km) * c * math.sin(lam),
+        (n * (1.0 - _WGS84_E2) + alt_km) * s,
+    )
+
+
+def _ecef_to_lla(x, y, z):
+    lon = math.atan2(y, x)
+    p = math.hypot(x, y)
+    lat = math.atan2(z, p * (1.0 - _WGS84_E2))
+    for _ in range(6):
+        s = math.sin(lat)
+        n = _WGS84_A_KM / math.sqrt(1.0 - _WGS84_E2 * s * s)
+        alt = p / math.cos(lat) - n
+        lat = math.atan2(z, p * (1.0 - _WGS84_E2 * n / (n + alt)))
+    s = math.sin(lat)
+    n = _WGS84_A_KM / math.sqrt(1.0 - _WGS84_E2 * s * s)
+    return math.degrees(lat), math.degrees(lon), p / math.cos(lat) - n
+
+
 def _lla_to_enu(lat, lon, alt_km, ref_lat, ref_lon, ref_alt_km):
-    """Convert LLA to ENU (km) relative to reference point."""
-    dlat = math.radians(lat - ref_lat)
-    dlon = math.radians(lon - ref_lon)
-    north = dlat * R_EARTH
-    east = dlon * R_EARTH * math.cos(math.radians(ref_lat))
-    up = alt_km - ref_alt_km
+    """Convert LLA to ENU (km) relative to reference point, on WGS84."""
+    x, y, z = _lla_to_ecef(lat, lon, alt_km)
+    x0, y0, z0 = _lla_to_ecef(ref_lat, ref_lon, ref_alt_km)
+    dx, dy, dz = x - x0, y - y0, z - z0
+    sp, cp = math.sin(math.radians(ref_lat)), math.cos(math.radians(ref_lat))
+    sl, cl = math.sin(math.radians(ref_lon)), math.cos(math.radians(ref_lon))
+    east = -sl * dx + cl * dy
+    north = -sp * cl * dx - sp * sl * dy + cp * dz
+    up = cp * cl * dx + cp * sl * dy + sp * dz
     return east, north, up
 
 
 def _enu_to_lla(east_km, north_km, up_km, ref_lat, ref_lon, ref_alt_km):
-    """Convert ENU (km) back to LLA."""
-    lat = ref_lat + math.degrees(north_km / R_EARTH)
-    lon = ref_lon + math.degrees(east_km / (R_EARTH * math.cos(math.radians(ref_lat))))
-    alt_km_out = ref_alt_km + up_km
-    return lat, lon, alt_km_out
+    """Convert ENU (km) back to LLA, on WGS84."""
+    sp, cp = math.sin(math.radians(ref_lat)), math.cos(math.radians(ref_lat))
+    sl, cl = math.sin(math.radians(ref_lon)), math.cos(math.radians(ref_lon))
+    x0, y0, z0 = _lla_to_ecef(ref_lat, ref_lon, ref_alt_km)
+    dx = -sl * east_km - sp * cl * north_km + cp * cl * up_km
+    dy = cl * east_km - sp * sl * north_km + cp * sl * up_km
+    dz = cp * north_km + sp * up_km
+    lat, lon, alt_km = _ecef_to_lla(x0 + dx, y0 + dy, z0 + dz)
+    return lat, lon, alt_km
+
+
+def _advance_latlon(lat, lon, alt_km, vel_east, vel_north, dt):
+    """Move (lat, lon) by a horizontal velocity (km/s) for dt seconds, using
+    WGS84's meridian and prime-vertical radii so the distance flown matches
+    the velocity the echo's Doppler is computed from."""
+    s = math.sin(math.radians(lat))
+    w = 1.0 - _WGS84_E2 * s * s
+    n = _WGS84_A_KM / math.sqrt(w)
+    m = _WGS84_A_KM * (1.0 - _WGS84_E2) / w**1.5
+    dlat = math.degrees(vel_north * dt / (m + alt_km))
+    dlon = math.degrees(vel_east * dt / ((n + alt_km) * math.cos(math.radians(lat))))
+    return lat + dlat, lon + dlon
 
 
 def _haversine_km(lat1, lon1, lat2, lon2):
@@ -495,6 +551,19 @@ class SimulationWorld:
         # proximity to count as a conflict.
         self.min_separation_km: float = 5.0
         self.min_vertical_sep_km: float = 0.6  # ~2000 ft
+        # Reproducible runs.  None draws from the global ``random`` exactly as
+        # before.  A string gives every aircraft's motion jitter, every
+        # detection's noise and every frame's clutter its own stream, keyed by
+        # what it belongs to (aircraft or node, and the tick), so a change
+        # that alters how many draws one of them makes cannot shift another.
+        self.rng_seed: str | None = None
+        self._tick = 0
+
+    def _rng(self, *key):
+        """The stream for ``key``: a fresh seeded Random, or the global one."""
+        if self.rng_seed is None:
+            return random
+        return random.Random(":".join(str(k) for k in (self.rng_seed, *key)))
 
     def add_node(self, config: NodeConfig):
         """Register a synthetic node in the simulation.
@@ -820,6 +889,7 @@ class SimulationWorld:
     def step(self, dt: float, mode: str = "detection"):
         """Advance simulation by dt seconds."""
         self._time += dt
+        self._tick += 1
 
         # Expired non-drones head for the edge before the retire filter sees
         # them past the edge (see _route_out / _should_retire).
@@ -942,10 +1012,7 @@ class SimulationWorld:
         # (ADS-B override happens in generate_detections_for_node)
 
         # Move in ENU then convert back to LLA
-        dlat = (ac.vel_north / R_EARTH) * (180 / math.pi) * dt
-        dlon = (ac.vel_east / (R_EARTH * math.cos(math.radians(ac.lat)))) * (180 / math.pi) * dt
-        ac.lat += dlat
-        ac.lon += dlon
+        ac.lat, ac.lon = _advance_latlon(ac.lat, ac.lon, ac.alt_km, ac.vel_east, ac.vel_north, dt)
         ac.alt_km += ac.vel_up * dt
         # Level off: vel_up was set once at spawn and integrated forever, so
         # every aircraft eventually saturated against the altitude clamps —
@@ -964,6 +1031,8 @@ class SimulationWorld:
         if ac.anomaly_event == "orbit" and ac.anomaly_fired:
             # Constant 6°/s turn → tight circle (~1 km radius at 200 m/s)
             ac.heading_deg = (ac.heading_deg + 6.0 * dt) % 360
+        elif ac.turn_rate_deg_s and not ac.waypoints:
+            ac.heading_deg = (ac.heading_deg + ac.turn_rate_deg_s * dt) % 360
         elif ac.waypoint_idx < len(ac.waypoints):
             # Navigate toward next waypoint
             target_wp = ac.waypoints[ac.waypoint_idx]
@@ -987,29 +1056,30 @@ class SimulationWorld:
         ac.vel_north = ac.speed_km_s * math.cos(heading_rad)
 
         # Small random perturbations
+        rng = self._rng("motion", ac.object_id, self._tick)
         if not ac.is_anomalous:
-            ac.vel_east += random.gauss(0, 0.0005) * dt
-            ac.vel_north += random.gauss(0, 0.0005) * dt
+            ac.vel_east += rng.gauss(0, 0.0005) * dt
+            ac.vel_north += rng.gauss(0, 0.0005) * dt
         else:
             # Anomalous: erratic behaviour including instant stop/start
-            r = random.random()
+            r = rng.random()
             if r < 0.005:
                 # Instant stop: velocity drops to near zero
-                ac.speed_km_s = random.uniform(0.0, 0.005)
+                ac.speed_km_s = rng.uniform(0.0, 0.005)
                 ac.vel_east = 0.0
                 ac.vel_north = 0.0
                 ac.vel_up = 0.0
             elif r < 0.015:
                 # Instant start / speed jump: sudden acceleration
-                ac.speed_km_s = random.uniform(0.15, 0.5)
-                ac.heading_deg = random.uniform(0, 360)
+                ac.speed_km_s = rng.uniform(0.15, 0.5)
+                ac.heading_deg = rng.uniform(0, 360)
             elif r < 0.025:
                 # Sharp turn: heading change much larger than standard rate
-                ac.heading_deg = (ac.heading_deg + random.uniform(30, 120)) % 360
+                ac.heading_deg = (ac.heading_deg + rng.uniform(30, 120)) % 360
             elif r < 0.03:
                 # Random speed/heading change
-                ac.speed_km_s = random.uniform(0.01, 0.5)
-                ac.heading_deg = random.uniform(0, 360)
+                ac.speed_km_s = rng.uniform(0.01, 0.5)
+                ac.heading_deg = rng.uniform(0, 360)
 
     def _fire_anomaly_event(self, ac: SimulatedAircraft):
         """Execute a scheduled mid-flight anomaly event."""
@@ -1154,14 +1224,15 @@ class SimulationWorld:
             doppler = _bistatic_doppler(target_enu, vel_enu, tx_enu, rx_enu, node.fc_hz)
 
             # SNR depends on distance — compute before noise/miss decisions
+            rng = self._rng("detection", node_id, self._tick, ac.object_id)
             dist = _norm(target_enu)
             base_snr = 25 - 10 * math.log10(max(dist, 1))
-            snr = max(base_snr + random.gauss(0, 2), 4.0)
+            snr = max(base_snr + rng.gauss(0, 2), 4.0)
 
             # SNR-dependent missed detection: weaker signals are harder to detect.
             # P(miss) rises from ~5% at SNR 20+ to ~40% near detection threshold SNR 5.
             p_miss = max(0.0, min(0.5, 0.05 + 0.35 * (1 - (snr - 4) / 18)))
-            if random.random() < p_miss:
+            if rng.random() < p_miss:
                 continue
 
             # Add measurement noise — scales inversely with SNR.
@@ -1169,8 +1240,8 @@ class SimulationWorld:
             # (achievable at SNR > 15 dB with 150 kHz FM bandwidth).
             noise_scale = max(0.5, 2.0 - (snr - 4) / 18)
             delay_true, doppler_true = delay, doppler
-            delay += random.gauss(0, 0.1 * noise_scale)
-            doppler += random.gauss(0, 2.0 * noise_scale)
+            delay += rng.gauss(0, 0.1 * noise_scale)
+            doppler += rng.gauss(0, 2.0 * noise_scale)
 
             delays.append(round(delay, 2))
             dopplers.append(round(doppler, 2))
@@ -1216,14 +1287,15 @@ class SimulationWorld:
 
         # Clutter/false alarm detections — Poisson-distributed count (mean ~2)
         # with range-biased delays (more clutter at shorter ranges).
-        n_clutter = min(int(random.expovariate(0.5)), 6)
+        rng = self._rng("clutter", node_id, self._tick)
+        n_clutter = min(int(rng.expovariate(0.5)), 6)
         for _ in range(n_clutter):
             # Bias toward shorter delays (near-range ground clutter)
-            clutter_delay = random.expovariate(0.05)
+            clutter_delay = rng.expovariate(0.05)
             clutter_delay = min(clutter_delay, 60.0)
             delays.append(round(clutter_delay, 2))
-            dopplers.append(round(random.uniform(node.doppler_min, node.doppler_max), 2))
-            snrs.append(round(random.uniform(4, 8), 2))
+            dopplers.append(round(rng.uniform(node.doppler_min, node.doppler_max), 2))
+            snrs.append(round(rng.uniform(4, 8), 2))
             adsb_list.append(None)
             if labels is not None:
                 labels.append(
@@ -1366,8 +1438,7 @@ class SimulationWorld:
             vel_east = speed_km_s * math.sin(heading_rad)
             vel_north = speed_km_s * math.cos(heading_rad)
             age = min(max(raw_age, 0.0), self.live_stale_s)
-            lat = float(lat) + (vel_north / R_EARTH) * (180 / math.pi) * age
-            lon = float(lon) + (vel_east / (R_EARTH * math.cos(math.radians(float(lat))))) * (180 / math.pi) * age
+            lat, lon = _advance_latlon(float(lat), float(lon), alt_km, vel_east, vel_north, age)
             alt_km = max(0.05, alt_km + vel_up * age)
             flight = str(row.get("flight") or "").strip() or None
 
@@ -1486,8 +1557,7 @@ class SimulationWorld:
 
     def _dead_reckon(self, ac: SimulatedAircraft, dt: float) -> None:
         """Coast a live aircraft on its last reported velocity."""
-        ac.lat += (ac.vel_north / R_EARTH) * (180 / math.pi) * dt
-        ac.lon += (ac.vel_east / (R_EARTH * math.cos(math.radians(ac.lat)))) * (180 / math.pi) * dt
+        ac.lat, ac.lon = _advance_latlon(ac.lat, ac.lon, ac.alt_km, ac.vel_east, ac.vel_north, dt)
         ac.alt_km = max(0.05, ac.alt_km + ac.vel_up * dt)
 
     # ── ML Training Data Batch Export ────────────────────────────────────────

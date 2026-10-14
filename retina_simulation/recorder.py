@@ -18,6 +18,9 @@ run killed mid-way still leaves everything up to that point readable:
     Every solver outcome the server records at ``/api/test/mlat-history``,
     each kept once.  Read every 15 s while the run lasts (the server keeps
     about 30 minutes), when the orchestrator has a ``--validation-url``.
+``rx_trajectory.ndjson``
+    One line per tick with every node's receiver position and velocity, for
+    runs that record it (experiments; see experiment.py).
 
 Nothing here touches the wire.  The labels are produced alongside the frame
 by ``SimulationWorld.generate_detections_for_node(labels=...)`` and only ever
@@ -100,6 +103,7 @@ class RunRecorder:
         self._truth = open(os.path.join(out_dir, "truth.ndjson"), "a", buffering=1, encoding="utf-8")  # noqa: SIM115
         self._solves = open(os.path.join(out_dir, "solves.ndjson"), "a", buffering=1, encoding="utf-8")  # noqa: SIM115
         self._solves_seen: set[tuple] = set()
+        self._rx = None
         self.frames_written = 0
 
     def frame(self, node_id: str, frame: dict, labels: list[dict], sent: bool) -> None:
@@ -119,6 +123,14 @@ class RunRecorder:
         rec = {"t_ms": timestamp_ms, "aircraft": [aircraft_state(ac) for ac in aircraft]}
         self._truth.write(json.dumps(rec) + "\n")
 
+    def receiver(self, timestamp_ms: int, poses: dict) -> None:
+        """Each node's receiver position and velocity at this tick.  Opened on
+        first use, so a run that never calls it writes no file."""
+        if self._rx is None:
+            path = os.path.join(self.out_dir, "rx_trajectory.ndjson")
+            self._rx = open(path, "a", buffering=1, encoding="utf-8")  # noqa: SIM115
+        self._rx.write(json.dumps({"t_ms": timestamp_ms, "rx": poses}) + "\n")
+
     def solves(self, records: list[dict]) -> int:
         """Append the records not yet written; returns how many were new."""
         new = 0
@@ -135,3 +147,5 @@ class RunRecorder:
         self._frames.close()
         self._truth.close()
         self._solves.close()
+        if self._rx is not None:
+            self._rx.close()

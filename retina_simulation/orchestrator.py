@@ -32,6 +32,8 @@ import ssl
 import time
 from datetime import datetime, timezone
 
+from retina_simulation import experiment
+
 # Add parent dir so we can import simulation packages
 from retina_simulation.generator import (
     _KNOWN_METROS,
@@ -290,6 +292,8 @@ class FleetOrchestrator:
         # Set under --adsb-truth-only: frames reach the server without their
         # ADS-B tags, so every solve it makes is radar-only.
         self.withhold_adsb = False
+        # Set under --experiment: the recording also carries the receiver pose.
+        self.record_receiver = False
         # Auto-reconnect state: per-node earliest-retry timestamp and attempt count
         self._reconnect_next: dict[str, float] = {}
         self._reconnect_attempts: dict[str, int] = {}
@@ -592,6 +596,8 @@ class FleetOrchestrator:
                 self._record_ground_truth(timestamp_ms)
                 if self.recorder:
                     self.recorder.truth(timestamp_ms, self.world.aircraft)
+                    if self.record_receiver:
+                        self.recorder.receiver(timestamp_ms, experiment.receiver_pose(self.world))
 
                 # Send frames only to nodes whose per-node cooldown has elapsed
                 now_t = time.monotonic()
@@ -1363,6 +1369,25 @@ async def main_async(args):
         orchestrator.withhold_adsb = True
         log.info("ADS-B kept from the server: all solves will be radar-only")
 
+    if args.experiment:
+        # One run of an experiment file, through the server in real time: the
+        # same scripted flight and the same seeded noise as
+        # tools/run_experiment.py records offline.  Its fleet replaces --config.
+        exp = experiment.load(args.experiment)
+        run = next((r for r in exp["runs"] if r["seed"] == args.experiment_seed), None)
+        if run is None or "plan" not in run:
+            raise SystemExit(f"--experiment-seed {args.experiment_seed}: no such run with a plan in {args.experiment}")
+        exp_world = experiment.build_world(exp, run, experiment.fleet_nodes(exp))
+        world = orchestrator.world
+        world.nodes = exp_world.nodes
+        world.aircraft = exp_world.aircraft
+        world.rng_seed = exp_world.rng_seed
+        world.min_aircraft = world.max_aircraft = 0
+        world.metro_cells = []
+        orchestrator.withhold_adsb = True
+        orchestrator.record_receiver = True
+        log.info("Experiment %s, seed %d: one scripted %s flight", exp["name"], run["seed"], run["flight"])
+
     if args.record:
         orchestrator.recorder = RunRecorder(args.record, all_nodes)
         log.info("Recording frames, truth and server solves to %s", args.record)
@@ -1579,6 +1604,14 @@ def main():
         "no dashboard physics polling), so every server solve is radar-only. Implies --mode adsb.",
     )
     parser.add_argument(
+        "--experiment",
+        type=str,
+        default="",
+        help="Experiment file (experiments/*.json) to fly one run of; pass --experiment-seed and the same fleet "
+        "as --config. Implies --adsb-truth-only.",
+    )
+    parser.add_argument("--experiment-seed", type=int, default=0, help="Which run of --experiment to fly")
+    parser.add_argument(
         "--record",
         type=str,
         default="",
@@ -1638,6 +1671,8 @@ def main():
         help="Fraction of spawns routed through metro coverage rings (rest en-route)",
     )
     args = parser.parse_args()
+    if args.experiment:
+        args.adsb_truth_only = True
     if args.adsb_truth_only:
         args.mode = "adsb"
 

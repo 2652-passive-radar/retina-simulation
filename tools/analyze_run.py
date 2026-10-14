@@ -230,7 +230,12 @@ def summary_text(nodes, dets, solves_all, solves, ac_rows, ticks, n_maps) -> str
     radar_only = [s for s in solves_all if not s.get("known_lane") and not s.get("adsb_hex")]
     unpublished = Counter(s.get("outcome") for s in radar_only if not is_radar_only_published(s))
     reasons = ", ".join(f"{k} {v}" for k, v in unpublished.most_common())
-    lines.append(f"Radar-only solves: {len(solves)} published, {sum(unpublished.values())} not published ({reasons})")
+    if solves_all:
+        lines.append(
+            f"Radar-only solves: {len(solves)} published, {sum(unpublished.values())} not published ({reasons})"
+        )
+    else:
+        lines.append("Server solves: none recorded (no server in this run)")
     err = [r["err_horiz_m"] for r in solves if r.get("err_horiz_m") is not None]
     if err:
         lines.append(

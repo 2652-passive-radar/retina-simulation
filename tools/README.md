@@ -2,6 +2,11 @@
 
 Two commands: one records a run, one turns it into tables and maps.
 
+For the controlled experiments of the receiver-motion study (one scripted
+aircraft, fixed seeds, the same flights every time), see
+[Experiments](#experiments-one-command-reproducible) at the end. The lab
+notebook is `experiments/NOTEBOOK.md`.
+
 ## The scene (`sites/ubc/`)
 
 * **3 receivers** on one UBC rooftop (49°15'57.7"N 123°15'06.5"W), each on a
@@ -99,3 +104,56 @@ colour is which aircraft. `--node synth-ubc-cisc` picks one node and
   model missed leaves nothing, where a real map would still show a weak peak.
 * All receivers share one rooftop and one beam. Real, spread-out sites would
   give better geometry.
+
+## Experiments: one command, reproducible
+
+An experiment file (`experiments/baseline_static.json`) fixes everything about
+a set of runs: the fleet, the duration, one scripted aircraft per run, and the
+seed behind every random draw. Its flight plans and a fingerprint of each
+recording are stored in the file, so every run of it replays exactly the same
+flights with exactly the same detections. If the simulator ever stops
+reproducing them, the run stops and says which seed changed.
+
+Run everything with the backend's Python, which already has
+`retina_geolocator`. It also needs matplotlib, once:
+
+```
+cd "$root\backend"
+.\.venv\Scripts\python.exe -m pip install matplotlib
+```
+
+where `$root` is your `retina-server` folder, e.g.
+`$root = "C:\Users\ericf\OneDrive\Documents\Year 5 Term 1\ENPH 479\2652-Passive-Radar\retina-server"`.
+
+Offline (about a minute; no server, no other terminals):
+
+```
+cd "$root\libs\retina-simulation"
+..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\baseline_static.json
+```
+
+Through the real server as well (adds the run duration per seed, ~26 min for
+the baseline). Stop your own backend first; this starts a fresh one per seed:
+
+```
+..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\baseline_static.json --system --backend-dir ..\..\backend
+```
+
+Output goes to `runs\baseline-static\<date_time>\`:
+
+| File | Holds |
+|---|---|
+| `rmse_vs_time.png` | horizontal position and velocity RMSE against time (15 s sliding window), one line per seed |
+| `rmse_vs_time_system.png` | the same for the server's solves (`--system` only) |
+| `paths_map.png` | the 5 flights over UBC, the three illuminators and the beam |
+| `summary.csv` | per seed and mean: availability, RMSE / mean / median / 95th percentile of position and velocity error |
+| `rmse_vs_time.csv` | the numbers behind the plot |
+| `manifest.json` | seeds, flight plans, solver settings, and the git commits that produced the run |
+| `seed-<n>\` | that run's recording, `analysis\` (including `offline_solves.csv`) and `maps\`, as for any run; under `--system` also `system\` |
+
+The offline solve (`tools/offline_solve.py`) runs the same geolocator the
+server uses on the recorded detections, with the server's altitude sweep and
+publication gates, but with perfect association and no tracker, so it is the
+optimistic, exactly repeatable number; the `--system` run is what the full
+pipeline does. Only seconds where all three channels detect the aircraft are
+solved; the rest count against availability.
