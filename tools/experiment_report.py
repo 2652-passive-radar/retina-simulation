@@ -164,6 +164,21 @@ def mean_row(source: str, rows: list[dict]) -> dict:
     return out
 
 
+def _save(fig, path: str) -> None:
+    """Save a figure, explaining the usual Windows/OneDrive failure in words."""
+    try:
+        fig.savefig(path, dpi=160, facecolor=SURFACE)
+    except OSError as exc:
+        raise SystemExit(
+            f"Could not write {path} ({exc.strerror or exc}).\n"
+            "On Windows this usually means the file is open in another program (an image viewer, the\n"
+            "File Explorer preview pane) or OneDrive is syncing it. Close it, pause OneDrive, and run the\n"
+            "same command again; or keep runs outside OneDrive with --out."
+        ) from None
+    finally:
+        plt.close(fig)
+
+
 def _style(ax) -> None:
     ax.set_facecolor(SURFACE)
     for side in ("top", "right"):
@@ -211,8 +226,7 @@ def plot_rmse(path: str, title: str, per_seed: list[tuple[dict, list[dict], dict
         fontsize=8.5,
     )
     fig.subplots_adjust(left=0.08, right=0.98, top=0.9, bottom=0.08, hspace=0.12)
-    fig.savefig(path, dpi=160, facecolor=SURFACE)
-    plt.close(fig)
+    _save(fig, path)
 
 
 def _clipped(values: list[float]) -> float:
@@ -272,8 +286,7 @@ def plot_errors(path: str, title: str, per_seed: list[tuple[dict, list[dict], di
         note += f" Triangles on the top edge: {clipped_total} solves beyond the axis (values in errors.csv)."
     fig.text(0.06, 0.935, note, color=INK_2, fontsize=8.5)
     fig.subplots_adjust(left=0.08, right=0.98, top=0.9, bottom=0.08, hspace=0.12)
-    fig.savefig(path, dpi=160, facecolor=SURFACE)
-    plt.close(fig)
+    _save(fig, path)
 
 
 def _land_patches(ax, bbox) -> None:
@@ -423,8 +436,7 @@ def plot_map(path: str, title: str, nodes: list[dict], paths: list[tuple[dict, l
              "Dots mark each flight's start. Coastline: Natural Earth.",
              color=INK_2, fontsize=7.5)  # fmt: skip
     fig.tight_layout(rect=(0, 0.04, 1, 1))
-    fig.savefig(path, dpi=160, facecolor=SURFACE)
-    plt.close(fig)
+    _save(fig, path)
 
 
 def _truth_path(seed_dir: str) -> list[tuple[float, float]]:
