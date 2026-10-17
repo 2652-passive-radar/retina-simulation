@@ -150,10 +150,10 @@ Output goes to `runs\baseline-static\<date_time>\`:
 | File | Holds |
 |---|---|
 | `rmse_vs_time.png` | horizontal position and velocity RMSE against time (15 s sliding window), one line per seed |
-| `rmse_vs_time_system.png` | the same for the server's solves (`--system` only) |
+| `error_vs_time_system.png` | each of the server's 3-node solves' position and velocity error against time, one line per seed (`--system` only; the server solves every ~15 s, too sparse for a sliding-window RMSE) |
 | `paths_map.png` | the 5 flights over UBC, the three illuminators and the beam |
 | `summary.csv` | per seed and mean: availability, RMSE / mean / median / 95th percentile of position and velocity error |
-| `rmse_vs_time.csv` | the numbers behind the plot |
+| `rmse_vs_time.csv`, `errors.csv` | the numbers behind the plots: windowed RMSE (offline), and every solve's error (all sources) |
 | `manifest.json` | seeds, flight plans, solver settings, and the git commits that produced the run |
 | `seed-<n>\` | that run's recording, `analysis\` (including `offline_solves.csv`) and `maps\`, as for any run; under `--system` also `system\` |
 
@@ -163,3 +163,31 @@ publication gates, but with perfect association and no tracker, so it is the
 optimistic, exactly repeatable number; the `--system` run is what the full
 pipeline does. Only seconds where all three channels detect the aircraft are
 solved; the rest count against availability.
+
+How the server's solves are scored (`--system`):
+
+* **Like with like.** `summary.csv` reports the server's 3-node solves as
+  `system`, the same rule as offline, and its 2-node solves separately as
+  `system_2node`. With every receiver on one rooftop, two delay ellipses and a
+  pinned altitude often cross in two places inside the beam, and the server
+  sometimes publishes the wrong one, kilometres away: a real weakness of the
+  geometry, but a different question from the 3-node accuracy.
+* **One solve per epoch.** The server can publish one key at one measurement
+  time twice: a 2-node solve, then a 3-node re-solve when the third node joins.
+  Only the later one is kept.
+* **Raw solve position.** The server smooths what it puts on the map, and holds
+  the map position still for a re-solve of the same epoch, so the published
+  `lat`/`lon` can be the earlier 2-node answer. The score uses the solver's
+  own `raw_lat`/`raw_lon`, like the offline solve; the smoothed map position
+  and its error are kept beside it in each `solves.csv`.
+* **Availability means something different.** The server does not re-solve an
+  aircraft every second: it keeps a solved aircraft on the map between solves.
+  Its solves-per-second is therefore far below offline's by design.
+  `dark_follow_shadow` records are a diagnostic lane that is never published.
+
+To rebuild the analysis of an existing output folder after a change to the
+analysis (no recording, solving or server needed):
+
+```
+..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\baseline_static.json --reanalyze runs\baseline-static\<date_time>
+```

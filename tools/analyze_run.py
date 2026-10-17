@@ -5,11 +5,13 @@ Reads ``orchestrator --record DIR`` output and writes ``DIR/analysis/``:
 ``detections.csv``  (ML) every detection: measured delay (µs) and Doppler
                     (Hz), SNR, the label (aircraft id, or ``clutter``), the
                     true delay/Doppler and the residual (measured - true)
-``solves.csv``      (moving receiver) every published radar-only solve: the
-                    solver's state guess (position, velocity), the aircraft
-                    it was (label), that aircraft's ADS-B state at the same
-                    moment, and the localisation error vector (east, north,
-                    up, metres)
+``solves.csv``      (moving receiver) every published radar-only solve, one
+                    per key and measurement time: the solver's raw state
+                    guess (position, velocity, before the server's track
+                    smoother), the aircraft it was (label), that aircraft's
+                    true state at the same moment, the localisation error
+                    vector (east, north, up, metres) and velocity error, and
+                    the smoothed map position with its error
 ``aircraft.csv``    (moving receiver) each aircraft's ADS-B state, every second
 ``summary.txt``     the headline numbers, also printed
 
@@ -134,13 +136,36 @@ def is_radar_only_published(s: dict) -> bool:
     return bool(published) and not s.get("known_lane") and not s.get("adsb_hex")
 
 
-def solve_rows(solves: list[dict], truth: Truth) -> list[dict]:
-    rows = []
+def one_per_epoch(solves: list[dict]) -> list[dict]:
+    """The published radar-only solves, one per (key, measurement time).
+
+    The server can publish the same key at the same measurement time twice:
+    a 2-node solve, then a re-solve once a third node joins.  The re-solve's
+    map position is held at the first one (the smoother takes no new epoch),
+    so both records carry the same lat/lon and only raw_lat/raw_lon tells
+    them apart.  The last published record is the server's final answer for
+    that epoch, and the only one kept.
+    """
+    latest: dict[tuple, dict] = {}
     for s in solves:
         if not is_radar_only_published(s):
             continue
-        lat = s["lat"] if s.get("lat") is not None else s.get("raw_lat")
-        lon = s["lon"] if s.get("lon") is not None else s.get("raw_lon")
+        epoch = (s.get("solve_key"), s.get("measurement_ts_ms") or s.get("ts_ms"))
+        if epoch not in latest or (s.get("ts_ms") or 0) >= (latest[epoch].get("ts_ms") or 0):
+            latest[epoch] = s
+    return sorted(latest.values(), key=lambda s: s.get("measurement_ts_ms") or s.get("ts_ms") or 0)
+
+
+def solve_rows(solves: list[dict], truth: Truth) -> list[dict]:
+    """One row per published radar-only solve, scored on the solver's raw
+    position (raw_lat/raw_lon, before the server's track smoother) so it is
+    comparable with an offline solve; the smoothed map position and its error
+    are kept beside it."""
+    rows = []
+    for s in one_per_epoch(solves):
+        map_lat, map_lon = s.get("lat"), s.get("lon")
+        lat = s["raw_lat"] if s.get("raw_lat") is not None else map_lat
+        lon = s["raw_lon"] if s.get("raw_lon") is not None else map_lon
         if lat is None or lon is None:
             continue
         t_ms = s.get("measurement_ts_ms") or s["ts_ms"]
@@ -149,12 +174,15 @@ def solve_rows(solves: list[dict], truth: Truth) -> list[dict]:
             "t_ms": t_ms,
             "aircraft": st["id"] if st else None,
             "n_nodes": s.get("n_nodes"),
+            "solve_key": s.get("solve_key"),
             "est_lat": lat,
             "est_lon": lon,
             "est_alt_m": s.get("alt_m"),
             "alt_pinned": s.get("altitude_mode") == "pinned",
             "est_vel_east_ms": s.get("vel_east"),
             "est_vel_north_ms": s.get("vel_north"),
+            "map_lat": map_lat,
+            "map_lon": map_lon,
         }
         if st:
             e, n = _en_offset_m(st["lat"], st["lon"], lat, lon)
@@ -172,6 +200,13 @@ def solve_rows(solves: list[dict], truth: Truth) -> list[dict]:
                     "err_horiz_m": round(math.hypot(e, n), 1),
                 }
             )
+            if s.get("vel_east") is not None and s.get("vel_north") is not None:
+                row["verr_horiz_ms"] = round(
+                    math.hypot(s["vel_east"] - st["vel_east_ms"], s["vel_north"] - st["vel_north_ms"]), 2
+                )
+            if map_lat is not None and map_lon is not None:
+                me, mn = _en_offset_m(st["lat"], st["lon"], map_lat, map_lon)
+                row["map_err_horiz_m"] = round(math.hypot(me, mn), 1)
         rows.append(row)
     return rows
 
@@ -197,10 +232,11 @@ _DETECTION_FIELDS = [
     "delay_true_us", "doppler_true_hz", "delay_resid_us", "doppler_resid_hz",
 ]  # fmt: skip
 _SOLVE_FIELDS = [
-    "t_ms", "aircraft", "n_nodes",
+    "t_ms", "aircraft", "n_nodes", "solve_key",
     "est_lat", "est_lon", "est_alt_m", "alt_pinned", "est_vel_east_ms", "est_vel_north_ms",
     "true_lat", "true_lon", "true_alt_m", "true_vel_east_ms", "true_vel_north_ms", "true_vel_up_ms",
-    "err_east_m", "err_north_m", "err_up_m", "err_horiz_m",
+    "err_east_m", "err_north_m", "err_up_m", "err_horiz_m", "verr_horiz_ms",
+    "map_lat", "map_lon", "map_err_horiz_m",
 ]  # fmt: skip
 _AIRCRAFT_FIELDS = [
     "t_ms", "aircraft", "adsb_hex", "callsign", "lat", "lon", "alt_m",
@@ -236,11 +272,17 @@ def summary_text(nodes, dets, solves_all, solves, ac_rows, ticks, n_maps) -> str
         )
     else:
         lines.append("Server solves: none recorded (no server in this run)")
+    if unpublished.get("dark_follow_shadow"):
+        lines.append("  dark_follow_shadow solves are the server's diagnostic shadow lane: recorded, never published.")
     err = [r["err_horiz_m"] for r in solves if r.get("err_horiz_m") is not None]
     if err:
         lines.append(
-            f"Localisation error (horizontal): median {_pct(err, 0.5):.0f} m, 90th percentile {_pct(err, 0.9):.0f} m"
+            "Localisation error (horizontal, raw solve, one per epoch): "
+            f"median {_pct(err, 0.5):.0f} m, 90th percentile {_pct(err, 0.9):.0f} m"
         )
+        for n in sorted({r["n_nodes"] for r in solves if r.get("err_horiz_m") is not None}, reverse=True):
+            e_n = [r["err_horiz_m"] for r in solves if r.get("n_nodes") == n and r.get("err_horiz_m") is not None]
+            lines.append(f"  {n} nodes: {len(e_n)} solves, median {_pct(e_n, 0.5):.0f} m, max {max(e_n):.0f} m")
     if any(r.get("alt_pinned") for r in solves):
         lines.append("  Altitude is pinned in radar-only solves, so err_up_m is not a solved quantity.")
     known = [s for s in solves_all if s.get("known_lane") or s.get("adsb_hex")]

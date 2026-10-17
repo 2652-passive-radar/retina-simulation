@@ -10,7 +10,11 @@ to the seed folders:
 ``rmse_vs_time.csv``    the windowed RMSE series behind the plot
 ``rmse_vs_time.png``    (offline) horizontal position and velocity RMSE
                         against time, one line per seed
-``rmse_vs_time_system.png``  the same for the server's solves, when present
+``error_vs_time_system.png``  each of the server's 3-node solves' position
+                        and velocity error against time, one line per seed
+                        (the server solves every ~15 s, too sparse for a
+                        sliding-window RMSE; offline is dense enough for one)
+``errors.csv``          every solve's error, the data behind those plots
 ``paths_map.png``       the flights over the UBC site, its illuminators and
                         the surveillance beam
 
@@ -95,10 +99,10 @@ def load_offline(seed_dir: str) -> tuple[list[dict], int]:
     ], len(rows)
 
 
-def load_system(sys_dir: str, ticks: int) -> tuple[list[dict], int] | None:
-    """Published server solves from analyze_run's solves.csv (a seed's
-    ``system/`` recording), with velocity error added from its true and
-    estimated velocity columns, timed from the recording's first tick."""
+def load_system(sys_dir: str, ticks: int, n_nodes: int) -> tuple[list[dict], int] | None:
+    """Published server solves with exactly ``n_nodes`` nodes, from
+    analyze_run's solves.csv (a seed's ``system/`` recording: raw solve
+    position, one solve per epoch), timed from the recording's first tick."""
     path = os.path.join(sys_dir, "analysis", "solves.csv")
     if not os.path.exists(path):
         return None
@@ -106,15 +110,15 @@ def load_system(sys_dir: str, ticks: int) -> tuple[list[dict], int] | None:
         t0_ms = json.loads(f.readline())["t_ms"] - 1000
     out = []
     for r in _read_csv(path):
-        if r.get("err_horiz_m") in (None, ""):
+        if r.get("err_horiz_m") in (None, "") or _f(r.get("n_nodes")) != n_nodes:
             continue
-        vel = None
-        if r.get("est_vel_east_ms") not in (None, "") and r.get("true_vel_east_ms") not in (None, ""):
-            vel = math.hypot(
-                float(r["est_vel_east_ms"]) - float(r["true_vel_east_ms"]),
-                float(r["est_vel_north_ms"]) - float(r["true_vel_north_ms"]),
-            )
-        out.append({"t_s": (int(float(r["t_ms"])) - t0_ms) / 1000.0, "pos": float(r["err_horiz_m"]), "vel": vel})
+        out.append(
+            {
+                "t_s": (int(float(r["t_ms"])) - t0_ms) / 1000.0,
+                "pos": float(r["err_horiz_m"]),
+                "vel": _f(r.get("verr_horiz_ms")),
+            }
+        )
     return out, ticks
 
 
@@ -206,6 +210,67 @@ def plot_rmse(path: str, title: str, per_seed: list[tuple[dict, list[dict], dict
         color=INK_2,
         fontsize=8.5,
     )
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.9, bottom=0.08, hspace=0.12)
+    fig.savefig(path, dpi=160, facecolor=SURFACE)
+    plt.close(fig)
+
+
+def _clipped(values: list[float]) -> float:
+    """A y-axis top that keeps the bulk readable: a few far outliers are drawn
+    as markers on the top edge instead of squashing everything else."""
+    ordered = sorted(values)
+    p98 = ordered[min(len(ordered) - 1, int(0.98 * len(ordered)))]
+    return max(p98 * 1.25, 1e-9)
+
+
+def plot_errors(path: str, title: str, per_seed: list[tuple[dict, list[dict], dict]], t_max: int):
+    """Each solve's horizontal position and velocity error against time, one
+    line per seed through its solves (markers are the solves)."""
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7.5), sharex=True, facecolor=SURFACE)
+    panels = (
+        ("pos", "pos_rmse_m", "Horizontal position error (m)", "m"),
+        ("vel", "vel_rmse_ms", "Horizontal velocity error (m/s)", "m/s"),
+    )
+    clipped_total = 0
+    for ax, (key, sum_key, label, unit) in zip(axes, panels):
+        _style(ax)
+        every = [r[key] for _, rows, _ in per_seed for r in rows if r[key] is not None]
+        top = _clipped(every) if every else 1.0
+        for i, (run, rows, summ) in enumerate(per_seed):
+            colour = SERIES[i % len(SERIES)]
+            pts = sorted((r for r in rows if r[key] is not None), key=lambda r: r["t_s"])
+            ts = [r["t_s"] for r in pts]
+            ys = [min(r[key], top) for r in pts]
+            overall = summ[sum_key]
+            name = (
+                f"seed {run['seed']} ({run['flight']}): {len(pts)} solves, RMSE {overall:.1f} {unit}"
+                if overall
+                else f"seed {run['seed']}: no solves"
+            )
+            ax.plot(ts, ys, color=colour, linewidth=1.2, marker="o", markersize=3.5, label=name)
+            over = [r for r in pts if r[key] > top]
+            clipped_total += len(over)
+            if over:
+                ax.scatter(
+                    [r["t_s"] for r in over],
+                    [top] * len(over),
+                    marker="^",
+                    s=40,
+                    color=colour,
+                    edgecolors=SURFACE,
+                    linewidths=1,
+                    zorder=5,
+                )
+        ax.set_ylabel(label, color=INK, fontsize=10)
+        ax.set_ylim(0, top * 1.04)
+        ax.legend(loc="upper right", fontsize=8, frameon=False, labelcolor=INK_2)
+    axes[-1].set_xlabel("Time since start of run (s)", color=INK, fontsize=10)
+    axes[-1].set_xlim(0, t_max)
+    fig.suptitle(title, color=INK, fontsize=12, x=0.06, y=0.975, ha="left")
+    note = "Each marker is one solve; lines join a seed's consecutive solves."
+    if clipped_total:
+        note += f" Triangles on the top edge: {clipped_total} solves beyond the axis (values in errors.csv)."
+    fig.text(0.06, 0.935, note, color=INK_2, fontsize=8.5)
     fig.subplots_adjust(left=0.08, right=0.98, top=0.9, bottom=0.08, hspace=0.12)
     fig.savefig(path, dpi=160, facecolor=SURFACE)
     plt.close(fig)
@@ -373,13 +438,21 @@ def _truth_path(seed_dir: str) -> list[tuple[float, float]]:
 
 
 def build(out_dir: str, exp: dict, seed_dirs: dict[int, str], system: bool = False) -> list[dict]:
-    """Write every figure and table for the experiment; returns the summary rows."""
+    """Write every figure and table for the experiment; returns the summary rows.
+
+    Sources: ``offline`` (tools/offline_solve.py, 3-node seconds only),
+    ``system`` (the server's 3-node solves, the like-for-like comparison) and
+    ``system_2node`` (the server's 2-node solves, reported apart because their
+    pinned-altitude, two-ellipse geometry is a different and far worse case).
+    """
     window_s = exp.get("analysis", {}).get("rmse_window_s", 15)
     t_max = int(round(exp["duration_s"] / exp.get("tick_s", 1.0)))
-    summary, long_rows = [], []
+    min_nodes = (exp.get("solver") or {}).get("min_nodes", 3)
+    summary, long_rows, error_rows = [], [], []
     sources = [("offline", "Offline radar-only solves")]
     if system:
-        sources.append(("system", "Server (system) radar-only solves"))
+        sources.append(("system", f"Server (system) radar-only solves, {min_nodes} nodes"))
+        sources.append(("system_2node", "Server (system) radar-only solves, 2 nodes"))
     for source, label in sources:
         per_seed, rows_for_mean = [], []
         for run in exp["runs"]:
@@ -387,25 +460,34 @@ def build(out_dir: str, exp: dict, seed_dirs: dict[int, str], system: bool = Fal
             if source == "offline":
                 rows, ticks = load_offline(d)
             else:
-                loaded = load_system(os.path.join(d, "system"), t_max)
+                loaded = load_system(os.path.join(d, "system"), t_max, min_nodes if source == "system" else 2)
                 if loaded is None:
                     continue
                 rows, ticks = loaded
             summ = summary_row(source, run, rows, ticks)
             per_seed.append((run, rows, summ))
             rows_for_mean.append(summ)
-            pos_w = windowed(rows, "pos", window_s, t_max)
-            vel_w = windowed(rows, "vel", window_s, t_max)
-            for t, p, v in zip(range(1, t_max + 1), pos_w, vel_w):
-                long_rows.append(
-                    {"source": source, "seed": run["seed"], "flight": run["flight"], "t_s": t,
-                     "pos_rmse_m": _round(p, 1), "vel_rmse_ms": _round(v)}
+            for r in rows:
+                error_rows.append(
+                    {"source": source, "seed": run["seed"], "flight": run["flight"], "t_s": r["t_s"],
+                     "pos_err_m": _round(r["pos"], 1), "vel_err_ms": _round(r["vel"])}
                 )  # fmt: skip
+            if source == "offline":
+                pos_w = windowed(rows, "pos", window_s, t_max)
+                vel_w = windowed(rows, "vel", window_s, t_max)
+                for t, p, v in zip(range(1, t_max + 1), pos_w, vel_w):
+                    long_rows.append(
+                        {"source": source, "seed": run["seed"], "flight": run["flight"], "t_s": t,
+                         "pos_rmse_m": _round(p, 1), "vel_rmse_ms": _round(v)}
+                    )  # fmt: skip
         if not per_seed:
             continue
         summary += rows_for_mean + [mean_row(source, rows_for_mean)]
-        name = "rmse_vs_time.png" if source == "offline" else "rmse_vs_time_system.png"
-        plot_rmse(os.path.join(out_dir, name), f"{exp['name']}: {label}, receiver static", per_seed, window_s, t_max)
+        title = f"{exp['name']}: {label}, receiver static"
+        if source == "offline":
+            plot_rmse(os.path.join(out_dir, "rmse_vs_time.png"), title, per_seed, window_s, t_max)
+        elif source == "system":
+            plot_errors(os.path.join(out_dir, "error_vs_time_system.png"), title, per_seed, t_max)
 
     with open(os.path.join(out_dir, "summary.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SUMMARY_FIELDS)
@@ -415,6 +497,10 @@ def build(out_dir: str, exp: dict, seed_dirs: dict[int, str], system: bool = Fal
         w = csv.DictWriter(f, fieldnames=["source", "seed", "flight", "t_s", "pos_rmse_m", "vel_rmse_ms"])
         w.writeheader()
         w.writerows(long_rows)
+    with open(os.path.join(out_dir, "errors.csv"), "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["source", "seed", "flight", "t_s", "pos_err_m", "vel_err_ms"])
+        w.writeheader()
+        w.writerows(error_rows)
     with open(os.path.join(next(iter(seed_dirs.values())), "nodes.json"), encoding="utf-8") as f:
         nodes = json.load(f)
     paths = [(run, _truth_path(seed_dirs[run["seed"]])) for run in exp["runs"]]

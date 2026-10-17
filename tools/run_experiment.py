@@ -156,9 +156,18 @@ def main() -> None:
     parser.add_argument("--system", action="store_true", help="Also run every seed through a fresh backend")
     parser.add_argument("--backend-dir", help="retina-server/backend (needed with --system)")
     parser.add_argument("--backend-python", help="Python for the backend (default: this one)")
+    parser.add_argument(
+        "--reanalyze",
+        metavar="RUN_DIR",
+        help="Rebuild the analysis and figures of an existing output folder (e.g. after an analysis fix) "
+        "without recording or solving anything again",
+    )
     args = parser.parse_args()
 
     exp = experiment.load(args.experiment)
+    if args.reanalyze:
+        _reanalyze(exp, os.path.abspath(args.reanalyze))
+        return
     if experiment.resolve_plans(exp):
         experiment.save(exp)
         print(f"Sampled and saved flight plans into {args.experiment}")
@@ -244,14 +253,37 @@ def main() -> None:
     with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
 
+    _print_means(summary)
+    print(f"Wrote {out}")
+
+
+def _print_means(summary: list[dict]) -> None:
     print()
     for row in summary:
-        if row["seed"] == "mean":
-            print(
-                f"{row['source']:>7} mean over seeds: position RMSE {row['pos_rmse_m']:.1f} m, "
-                f"velocity RMSE {row['vel_rmse_ms']:.2f} m/s, availability {row['availability']:.0%}"
-            )
-    print(f"Wrote {out}")
+        if row["seed"] != "mean":
+            continue
+        if row["pos_rmse_m"] is None:
+            print(f"{row['source']:>12}: no solves")
+            continue
+        print(
+            f"{row['source']:>12} mean over seeds: position RMSE {row['pos_rmse_m']:.1f} m, "
+            f"velocity RMSE {row['vel_rmse_ms']:.2f} m/s, availability {row['availability']:.0%}"
+        )
+
+
+def _reanalyze(exp: dict, out: str) -> None:
+    """The analysis half of a run, again, on recordings already on disk."""
+    seed_dirs = {r["seed"]: os.path.join(out, f"seed-{r['seed']}") for r in exp["runs"]}
+    missing = [d for d in seed_dirs.values() if not os.path.isdir(d)]
+    if missing:
+        raise SystemExit(f"not an output folder of {exp['name']}: missing {missing[0]}")
+    system = all(os.path.isdir(os.path.join(d, "system")) for d in seed_dirs.values())
+    if system:
+        for d in seed_dirs.values():
+            _analyze(os.path.join(d, "system"), False, None)
+    summary = experiment_report.build(out, exp, seed_dirs, system=system)
+    _print_means(summary)
+    print(f"Rebuilt the analysis in {out}")
 
 
 if __name__ == "__main__":

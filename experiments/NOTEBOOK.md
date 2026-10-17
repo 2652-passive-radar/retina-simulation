@@ -216,3 +216,52 @@ was found. Newest entries at the bottom of each step.
 - Ground truth for the offline solve: positions are exact, but each solve is
   independent (no tracking), so velocity comes only from the 3 Doppler
   measurements of that second.
+
+## Step 0b: first system (server) run, 2026-10-17
+
+### Result as first reported
+- Run on your machine with `--system`. Offline: position RMSE 81.8 m,
+  velocity 3.56 m/s, availability 41%. System: **3,197 m, 39.3 m/s, 6%**.
+
+### Diagnosis
+- Published server solves over the 5 seeds, split by node count:
+  - 2-node: 17 solves, median 3,392 m, max 19,216 m
+  - 3-node: 66 solves, median 115 m, max 4,827 m
+- The worst 2-node solves sit 12-19 km **west** of the aircraft: the second
+  intersection of two delay ellipses at a pinned altitude. Seen from UBC it is
+  still inside the 120 deg beam, so the server's 2-node beam check cannot
+  reject it. A property of the single-rooftop geometry.
+- Some "3-node" outliers were the same solve twice. The raw records showed one
+  key and one measurement time published as `n_nodes 2`, then ~1 s later as
+  `n_nodes 3` with an identical `lat`/`lon`. Cause, from the server code: the
+  3-node re-solve of the same epoch has no new time step, so the track
+  smoother holds the map position at the previous (2-node) answer
+  (`track_filter._hold_position`); the 3-node answer is only in
+  `raw_lat`/`raw_lon`.
+- The analysis was also scoring the smoothed map position rather than the raw
+  solve, which is not comparable with the offline solve.
+- 6% is the solve rate, not a failure: the server attempts ~35-66 solves per
+  300 s run by design and keeps a solved aircraft on the map in between.
+  `dark_follow_shadow` (the largest "not published" group) is a diagnostic
+  shadow lane that never publishes.
+
+### Fixes (analysis only, nothing in the server)
+- `tools/analyze_run.py`: one solve per (key, measurement time), keeping the
+  last published record; scored on `raw_lat`/`raw_lon`; smoothed map position
+  and its error kept as extra columns; velocity error added; the summary text
+  breaks errors down by node count and explains `dark_follow_shadow`.
+- `tools/experiment_report.py`: `summary.csv` now has `system` (3-node, the
+  like-for-like comparison) and `system_2node` rows; new
+  `error_vs_time_system.png` (each solve's error, joined per seed) because the
+  server's ~1 solve per 15 s is too sparse for a sliding-window RMSE;
+  `errors.csv` holds every solve's error. Offline keeps the sliding-window
+  RMSE plot (dense enough; the per-solve version is unreadable at ~600
+  solves).
+- `tools/run_experiment.py --reanalyze RUN_DIR`: rebuilds the analysis of an
+  existing output folder without recording, solving or a server.
+- `tests/test_analyze_solves.py`: the duplicate pair from the real run (one
+  kept, scored on its raw position), keys and epochs kept apart, shadow and
+  ADS-B-assisted records left out, velocity error.
+- Checked end to end on a constructed system folder (offline solves re-shaped
+  as server records, with 2-node mirrors and held duplicates): duplicates
+  collapse, 2-node solves land in their own row, plots render.
