@@ -80,3 +80,34 @@ def test_unpublished_and_adsb_assisted_records_are_left_out():
 def test_velocity_error_is_scored():
     (row,) = solve_rows([dict(_THREE, vel_east=-47.0, vel_north=-56.0)], _TRUTH)
     assert row["verr_horiz_ms"] == 5.0
+
+
+def test_scored_on_this_seconds_solve_not_a_multi_epoch_fit():
+    fitted = _rec(
+        ts_ms=2900,
+        n_nodes=2,
+        lat=49.2,
+        lon=-123.3,
+        raw_lat=49.2,
+        raw_lon=-123.3,
+        pos_source="cv_fit",
+        solve_raw_lat=49.1555,
+        solve_raw_lon=-123.0980,
+        vel_source="cv_fit",
+        vel_east=40.0,
+        vel_north=40.0,
+        solver_vel_east=-50.0,
+        solver_vel_north=-60.0,
+    )
+    (row,) = solve_rows([fitted], _TRUTH)
+    assert row["err_horiz_m"] < 100.0
+    assert row["verr_horiz_ms"] == 0.0
+    assert row["pub_verr_horiz_ms"] > 100.0
+    assert (row["pos_source"], row["vel_source"]) == ("cv_fit", "cv_fit")
+
+
+def test_adopted_node_is_flagged():
+    widened = _rec(ts_ms=2900, n_nodes=3, n_nodes_pre_adopt=2, epoch_skew_s=5.0, lat=49.15, lon=-123.1)
+    (row,) = solve_rows([widened], _TRUTH)
+    assert row["adopted"] is True
+    assert row["epoch_skew_s"] == 5.0

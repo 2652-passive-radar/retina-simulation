@@ -2,17 +2,16 @@
 
 For every published solve whose horizontal position or velocity error is
 above a threshold, prints what the server recorded about it (nodes, residuals,
-altitude, where position and velocity came from, its own contamination
-verdict) beside what each contributing node actually detected at that moment:
-the aircraft's own detection, if the node made one, and the clutter in the
-same frame.  A solve built on a clutter detection, or on a node that missed
-the aircraft that second, shows up as a node whose aircraft detection is
-missing or does not match.
+altitude, where position and velocity came from, how far apart in time its
+measurements were, whether a node was adopted, its own contamination verdict).
+With --frames it also prints what each node actually detected over the solve's
+time span: the aircraft's own detection, if the node made one, and the clutter
+in the same frame.
 
 Usage::
 
     python tools/inspect_solves.py runs/baseline-static/<run>/seed-303/system
-    python tools/inspect_solves.py <system dir> --pos 300 --vel 30
+    python tools/inspect_solves.py <system dir> --pos 300 --vel 30 --frames
 """
 
 import argparse
@@ -33,11 +32,28 @@ def _read_ndjson(path: str) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
+def _show_frame(nid: str, fr: dict, t_ms: int) -> None:
+    ac = [x for x in fr["detections"] if not x["is_clutter"]]
+    clutter = [x for x in fr["detections"] if x["is_clutter"]]
+    dt = (fr["t_ms"] - t_ms) / 1000
+    if ac:
+        a = ac[0]
+        print(
+            f"   {nid} (frame {dt:+.1f} s): aircraft at delay {a['delay_us']} us, Doppler {a['doppler_hz']} Hz "
+            f"(true {a['delay_true']} / {a['doppler_true']})"
+        )
+    else:
+        print(f"   {nid} (frame {dt:+.1f} s): aircraft NOT detected")
+    for c in clutter:
+        print(f"      clutter: delay {c['delay_us']} us, Doppler {c['doppler_hz']} Hz")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect the server's worst solves of a --system recording")
     parser.add_argument("system_dir", help="a seed's system/ folder")
     parser.add_argument("--pos", type=float, default=300.0, help="position error threshold, m")
     parser.add_argument("--vel", type=float, default=30.0, help="velocity error threshold, m/s")
+    parser.add_argument("--frames", action="store_true", help="also print every node's detections over each solve")
     args = parser.parse_args()
     d = args.system_dir
 
@@ -66,26 +82,13 @@ def main() -> None:
         for k in _FIELDS:
             if rec.get(k) not in (None, [], {}):
                 print(f"   {k}: {rec[k]}")
-        nodes = rec.get("contributing_node_ids") or []
-        for nid in nodes:
-            near = [fr for fr in frames if fr["node_id"] == nid and abs(fr["t_ms"] - t_ms) <= 1500]
-            fr = min(near, key=lambda fr: abs(fr["t_ms"] - t_ms)) if near else None
-            if fr is None:
-                print(f"   {nid}: no frame within 1.5 s")
-                continue
-            ac = [x for x in fr["detections"] if not x["is_clutter"]]
-            clutter = [x for x in fr["detections"] if x["is_clutter"]]
-            dt = (fr["t_ms"] - t_ms) / 1000
-            if ac:
-                a = ac[0]
-                print(
-                    f"   {nid} (frame {dt:+.1f} s): aircraft detected at delay {a['delay_us']} us, "
-                    f"Doppler {a['doppler_hz']} Hz (true {a['delay_true']} / {a['doppler_true']})"
-                )
-            else:
-                print(f"   {nid} (frame {dt:+.1f} s): aircraft NOT detected this second")
-            for c in clutter:
-                print(f"      clutter: delay {c['delay_us']} us, Doppler {c['doppler_hz']} Hz")
+        if args.frames:
+            nodes = rec.get("contributing_node_ids") or sorted({fr["node_id"] for fr in frames})
+            skew_ms = int((rec.get("epoch_skew_s") or 0) * 1000)
+            for nid in nodes:
+                span = [fr for fr in frames if fr["node_id"] == nid and t_ms - skew_ms - 1500 <= fr["t_ms"] <= t_ms]
+                for fr in sorted(span, key=lambda fr: fr["t_ms"]):
+                    _show_frame(nid, fr, t_ms)
         print()
 
 

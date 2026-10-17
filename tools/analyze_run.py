@@ -156,20 +156,42 @@ def one_per_epoch(solves: list[dict]) -> list[dict]:
     return sorted(latest.values(), key=lambda s: s.get("measurement_ts_ms") or s.get("ts_ms") or 0)
 
 
+def _first(s: dict, *keys):
+    """The first of ``keys`` whose value is present, or None."""
+    for k in keys:
+        if s.get(k) is not None:
+            return s[k]
+    return None
+
+
 def solve_rows(solves: list[dict], truth: Truth) -> list[dict]:
-    """One row per published radar-only solve, scored on the solver's raw
-    position (raw_lat/raw_lon, before the server's track smoother) so it is
-    comparable with an offline solve; the smoothed map position and its error
-    are kept beside it."""
+    """One row per published radar-only solve, scored on that second's own
+    least-squares solve so it is comparable with an offline solve:
+
+    * position: ``solve_raw_lat``/``solve_raw_lon`` when the server swapped in
+      a multi-epoch constant-velocity fit (``pos_source`` cv_fit), else
+      ``raw_lat``/``raw_lon`` (before the track smoother), else the map position
+    * velocity: ``solver_vel_east``/``solver_vel_north`` when present (the
+      server may publish a fit's velocity instead, ``vel_source`` cv_fit),
+      else ``vel_east``/``vel_north``
+
+    What the server actually published (map position, published velocity) is
+    kept beside it with its own error, with the provenance fields that explain
+    a difference: pos_source, vel_source, epoch_skew_s and whether a node was
+    adopted into a 2-node solve.
+    """
     rows = []
     for s in one_per_epoch(solves):
         map_lat, map_lon = s.get("lat"), s.get("lon")
-        lat = s["raw_lat"] if s.get("raw_lat") is not None else map_lat
-        lon = s["raw_lon"] if s.get("raw_lon") is not None else map_lon
+        lat = _first(s, "solve_raw_lat", "raw_lat", "lat")
+        lon = _first(s, "solve_raw_lon", "raw_lon", "lon")
         if lat is None or lon is None:
             continue
+        vel_e = _first(s, "solver_vel_east", "vel_east")
+        vel_n = _first(s, "solver_vel_north", "vel_north")
         t_ms = s.get("measurement_ts_ms") or s["ts_ms"]
         st = (truth.at(s["gt_hex"], t_ms) if s.get("gt_hex") else None) or truth.nearest(lat, lon, t_ms)
+        pre = s.get("n_nodes_pre_adopt")
         row = {
             "t_ms": t_ms,
             "aircraft": st["id"] if st else None,
@@ -179,10 +201,17 @@ def solve_rows(solves: list[dict], truth: Truth) -> list[dict]:
             "est_lon": lon,
             "est_alt_m": s.get("alt_m"),
             "alt_pinned": s.get("altitude_mode") == "pinned",
-            "est_vel_east_ms": s.get("vel_east"),
-            "est_vel_north_ms": s.get("vel_north"),
+            "est_vel_east_ms": vel_e,
+            "est_vel_north_ms": vel_n,
             "map_lat": map_lat,
             "map_lon": map_lon,
+            "pub_vel_east_ms": s.get("vel_east"),
+            "pub_vel_north_ms": s.get("vel_north"),
+            "pos_source": s.get("pos_source"),
+            "vel_source": s.get("vel_source"),
+            "rms_delay_us": s.get("rms_delay"),
+            "epoch_skew_s": s.get("epoch_skew_s"),
+            "adopted": pre is not None and s.get("n_nodes") is not None and s["n_nodes"] > pre,
         }
         if st:
             e, n = _en_offset_m(st["lat"], st["lon"], lat, lon)
@@ -200,13 +229,15 @@ def solve_rows(solves: list[dict], truth: Truth) -> list[dict]:
                     "err_horiz_m": round(math.hypot(e, n), 1),
                 }
             )
-            if s.get("vel_east") is not None and s.get("vel_north") is not None:
-                row["verr_horiz_ms"] = round(
-                    math.hypot(s["vel_east"] - st["vel_east_ms"], s["vel_north"] - st["vel_north_ms"]), 2
-                )
+            if vel_e is not None and vel_n is not None:
+                row["verr_horiz_ms"] = round(math.hypot(vel_e - st["vel_east_ms"], vel_n - st["vel_north_ms"]), 2)
             if map_lat is not None and map_lon is not None:
                 me, mn = _en_offset_m(st["lat"], st["lon"], map_lat, map_lon)
                 row["map_err_horiz_m"] = round(math.hypot(me, mn), 1)
+            if s.get("vel_east") is not None and s.get("vel_north") is not None:
+                row["pub_verr_horiz_ms"] = round(
+                    math.hypot(s["vel_east"] - st["vel_east_ms"], s["vel_north"] - st["vel_north_ms"]), 2
+                )
         rows.append(row)
     return rows
 
@@ -236,7 +267,8 @@ _SOLVE_FIELDS = [
     "est_lat", "est_lon", "est_alt_m", "alt_pinned", "est_vel_east_ms", "est_vel_north_ms",
     "true_lat", "true_lon", "true_alt_m", "true_vel_east_ms", "true_vel_north_ms", "true_vel_up_ms",
     "err_east_m", "err_north_m", "err_up_m", "err_horiz_m", "verr_horiz_ms",
-    "map_lat", "map_lon", "map_err_horiz_m",
+    "map_lat", "map_lon", "map_err_horiz_m", "pub_vel_east_ms", "pub_vel_north_ms", "pub_verr_horiz_ms",
+    "pos_source", "vel_source", "rms_delay_us", "epoch_skew_s", "adopted",
 ]  # fmt: skip
 _AIRCRAFT_FIELDS = [
     "t_ms", "aircraft", "adsb_hex", "callsign", "lat", "lon", "alt_m",

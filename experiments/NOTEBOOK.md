@@ -265,3 +265,28 @@ was found. Newest entries at the bottom of each step.
 - Checked end to end on a constructed system folder (offline solves re-shaped
   as server records, with 2-node mirrors and held duplicates): duplicates
   collapse, 2-node solves land in their own row, plots render.
+
+### Step 0c: why some server solves are far off (seed 303)
+- `tools/inspect_solves.py` prints a bad solve's own server record and, with
+  `--frames`, what every node detected over the solve's time span.
+- Seed 303, t = 66.4 s, 3-node solve 858 m off: it began as a 2-node solve and
+  the server **adopted** CHEK-DT's measurement to widen it to 3 nodes
+  (`adopt_meta.outcome = widened`), from measurements **5.0 s apart**
+  (`epoch_skew_s = 5.014`), dead-reckoned onto one epoch. On a turning aircraft
+  they no longer agree: rms_delay 0.92 us (a normal 3-node solve is 0.02-0.2),
+  vertical velocity saturated, velocity flagged untrusted. 0.92 us still passes
+  the 3 us gate, so it published. A pipeline effect the offline solve, which
+  never mixes seconds, cannot reproduce.
+- 3-node solves at 218 s and 248 s: 42-61 m in position but 40-70 m/s in
+  velocity. Their published velocity is a multi-epoch constant-velocity fit
+  (`vel_source = cv_fit`), which a turning flight violates. The record keeps
+  that second's own solve velocity as `solver_vel_east/north`.
+- 2-node solves: grid altitude guesses of 5 and 7 km for an aircraft at
+  1.55 km, plus the mirror intersection; position from a constant-velocity
+  fit (`pos_source = cv_fit`).
+- Analysis change: score each record's single-second solve, like offline:
+  `solve_raw_lat/lon` (when the server swapped in a fit) else `raw_lat/lon`;
+  `solver_vel_east/north` else `vel_east/north`. The published position and
+  velocity, with their own errors, and `pos_source`, `vel_source`,
+  `rms_delay_us`, `epoch_skew_s` and an `adopted` flag are kept in
+  `solves.csv`.
