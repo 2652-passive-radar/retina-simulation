@@ -379,3 +379,16 @@ was found. Newest entries at the bottom of each step.
 - Through the server: needs a per-frame receiver pose on the server side.
 - Next step: receiver Doppler compensation in the solver
   (`f_meas = f_static + (1/lambda)(u_RP + u_TR).v_R`).
+
+### Step 1 fix: Windows worker crash (2026-10-18)
+- First run on your machine (16 logical cores) died in the solve stage:
+  `BrokenProcessPool` after a worker exited abruptly, the others then failing
+  with `WinError 6 (handle is invalid)`. Step 0 (5 workers) never hit it.
+- Likely cause: 16 heavy workers (numpy, scipy, matplotlib each), each also
+  starting a maths thread per core.
+- Fix in `tools/motion_experiment.py`: at most 8 workers by default; one
+  BLAS/OpenMP thread per worker; if a worker still dies, the remaining solves
+  run one at a time instead of aborting; `--jobs 1` runs without
+  multiprocessing at all.
+- Checked: a deliberately crashing worker is recovered from and gives the same
+  summary as a single-process run.

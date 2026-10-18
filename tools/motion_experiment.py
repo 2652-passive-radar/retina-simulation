@@ -19,13 +19,18 @@ import os
 import platform
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 
 import motion_report
 import offline_solve
 
 from retina_simulation import experiment
 from retina_simulation.motion import motion_from
+
+# Default ceiling on worker processes; more rarely helps (each solve is
+# CPU-bound) and on Windows a large pool of heavy workers has crashed.
+_DEFAULT_MAX_JOBS = 8
 
 
 def _solve(task: tuple) -> tuple[str, str, int]:
@@ -78,15 +83,38 @@ def solve_all(exp: dict, out: str, jobs: int | None) -> None:
         for run in exp["runs"]
         for alg in exp.get("algorithms", list(motion_report.ALGORITHMS))
     ]
-    workers = max(1, min(len(tasks), jobs or os.cpu_count() or 1))
-    print(f"Solving {len(tasks)} recordings x algorithms on {workers} processes...")
+    workers = max(1, min(len(tasks), jobs or min(os.cpu_count() or 1, _DEFAULT_MAX_JOBS)))
+    print(f"Solving {len(tasks)} recordings x algorithms on {workers} process{'es' if workers > 1 else ''}...")
     t0 = time.monotonic()
-    done = 0
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        for _ in pool.map(_solve, tasks):
-            done += 1
-            if done % 10 == 0 or done == len(tasks):
-                print(f"  {done}/{len(tasks)} ({time.monotonic() - t0:.0f} s)")
+    pending = list(tasks)
+
+    def progress() -> None:
+        n = len(tasks) - len(pending)
+        if n % 10 == 0 or n == len(tasks):
+            print(f"  {n}/{len(tasks)} ({time.monotonic() - t0:.0f} s)")
+
+    if workers > 1:
+        # One BLAS/OpenMP thread per worker: N workers each starting a thread
+        # per core oversubscribes the machine, and on Windows a worker that
+        # dies takes the whole pool down with it.
+        for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+            os.environ.setdefault(var, "1")
+        try:
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(_solve, t): t for t in tasks}
+                for fut in as_completed(futures):
+                    fut.result()
+                    pending.remove(futures[fut])
+                    progress()
+        except BrokenProcessPool:
+            print(
+                f"  A worker process died ({len(pending)} solves left); finishing them one at a time. "
+                "Use --jobs with a smaller number (or --jobs 1) to avoid this."
+            )
+    for t in list(pending):
+        _solve(t)
+        pending.remove(t)
+        progress()
 
 
 def print_means(summary: list[dict]) -> None:

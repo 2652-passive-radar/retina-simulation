@@ -163,7 +163,9 @@ def main() -> None:
         help="Rebuild the analysis and figures of an existing output folder (e.g. after an analysis fix) "
         "without recording or solving anything again",
     )
-    parser.add_argument("--jobs", type=int, help="Processes for the offline solves (default: all cores)")
+    parser.add_argument(
+        "--jobs", type=int, help="Processes for the offline solves (default: up to 8; 1 = no multiprocessing)"
+    )
     args = parser.parse_args()
 
     exp = experiment.load(args.experiment)

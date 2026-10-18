@@ -209,8 +209,10 @@ cd "$root\libs\retina-simulation"
 ```
 
 (`--out` keeps the ~85 recordings out of OneDrive; leave it off to use
-`runs\receiver-motion\<date_time>\`.) About 10 minutes on 4 cores; `--jobs N`
-sets the number of processes. `--reanalyze <folder>` rebuilds the figures and
+`runs\receiver-motion\<date_time>\`.) About 10 minutes on 4 cores. `--jobs N`
+sets the number of processes (default: up to 8); if a worker process crashes,
+which happened once on Windows with 16, the run finishes the remaining solves
+one at a time, and `--jobs 1` avoids multiprocessing altogether. `--reanalyze <folder>` rebuilds the figures and
 tables of an existing run.
 
 | File | Holds |
