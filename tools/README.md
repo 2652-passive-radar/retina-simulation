@@ -191,3 +191,37 @@ analysis (no recording, solving or server needed):
 ```
 ..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\baseline_static.json --reanalyze runs\baseline-static\<date_time>
 ```
+
+## Step 1: receiver motion (offline)
+
+`experiments/receiver_motion.json` reuses the step 0 flights (it names
+`baseline_static.json` as its `base`) and moves the receiver platform: static,
+straight east and north, back and forth, and round a circle, each at walking
+(1.5 m/s) and vehicle (15 m/s) speed, with the moving receiver's own Doppler
+left out and included. Every recording is solved twice: by the stationary
+algorithm (S, receiver assumed at its registered position, as the server does
+today) and with geometric compensation (G, the receiver's true position each
+second). Plans and recordings are fingerprinted exactly as in step 0.
+
+```
+cd "$root\libs\retina-simulation"
+..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\receiver_motion.json --out C:\radar-runs\receiver-motion
+```
+
+(`--out` keeps the ~85 recordings out of OneDrive; leave it off to use
+`runs\receiver-motion\<date_time>\`.) About 10 minutes on 4 cores; `--jobs N`
+sets the number of processes. `--reanalyze <folder>` rebuilds the figures and
+tables of an existing run.
+
+| File | Holds |
+|---|---|
+| `overview.png` | position and velocity RMSE of every moving case, S beside G, against the static baseline; receiver Doppler off and on |
+| `summary.csv` | per case x receiver Doppler x algorithm x seed, plus means: RMSE / median / p95 (every solve, and published only), availability, gate rejections, final offset |
+| `receiver_paths.png` | the receiver trajectories |
+| `paths_map.png` | the flights, as in step 0 |
+| `cases\<case>\rmse_vs_time_doppler-<off\|on>.png` | S, G and the static baseline over time, mean over seeds with the seed range shaded |
+| `cases\<case>\error_vs_offset.png` | every solve's position error against the receiver's offset (circle: against its direction) |
+| `cases\<case>\doppler-<off\|on>\seed-<n>\` | the recording, with `analysis\offline_solves_stationary.csv` and `offline_solves_geometric.csv` |
+
+One recording can also be solved by hand:
+`tools\offline_solve.py <seed folder> --receiver geometric`.

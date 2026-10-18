@@ -19,6 +19,7 @@ import json
 import math
 import os
 
+from retina_simulation.motion import Motion, place_receivers
 from retina_simulation.recorder import RunRecorder
 from retina_simulation.scripted import Coverage, FlightPlan, FlightRanges, aircraft_for, sample_plan
 from retina_simulation.world import NodeConfig, SimulationWorld
@@ -27,21 +28,37 @@ _FINGERPRINT_TOL = 0.1
 
 
 def load(path: str) -> dict:
+    """An experiment file.  One naming a ``base`` file inherits every key it
+    does not set itself from that file (fleet, duration, flights and their
+    plans, solver settings...), so a study reuses the baseline's exact runs."""
     with open(path, encoding="utf-8") as f:
         exp = json.load(f)
-    exp["_path"] = os.path.abspath(path)
+    path = os.path.abspath(path)
+    exp["_path"] = path
+    exp["_own_keys"] = [k for k in exp if not k.startswith("_")]
+    exp["_fleet_dir"] = os.path.dirname(path)
+    if "base" in exp:
+        base = load(os.path.join(os.path.dirname(path), exp["base"]))
+        exp["_base"] = base
+        for k, v in base.items():
+            if not k.startswith("_") and k not in exp:
+                exp[k] = v
+        if "fleet" not in exp["_own_keys"]:
+            exp["_fleet_dir"] = base["_fleet_dir"]
     return exp
 
 
 def save(exp: dict) -> None:
-    body = {k: v for k, v in exp.items() if not k.startswith("_")}
+    """Write back only the keys the file itself holds (not inherited ones)."""
+    keep = set(exp["_own_keys"]) | {"fingerprints"}
+    body = {k: v for k, v in exp.items() if k in keep}
     with open(exp["_path"], "w", encoding="utf-8") as f:
         json.dump(body, f, indent=2)
         f.write("\n")
 
 
 def fleet_path(exp: dict) -> str:
-    return os.path.normpath(os.path.join(os.path.dirname(exp["_path"]), exp["fleet"]))
+    return os.path.normpath(os.path.join(exp["_fleet_dir"], exp["fleet"]))
 
 
 def fleet_nodes(exp: dict) -> list[dict]:
@@ -103,33 +120,44 @@ def build_world(exp: dict, run: dict, nodes_raw: list[dict]) -> SimulationWorld:
     return world
 
 
-def receiver_pose(world: SimulationWorld) -> dict:
-    """Every node's receiver position and velocity (static until motion lands)."""
+def receiver_pose(world: SimulationWorld, offset_m: tuple[float, float] = (0.0, 0.0)) -> dict:
+    """Every node's receiver position and velocity, and the platform's offset
+    from its registered position (east, north, m)."""
     return {
         nid: {
-            "lat": n.rx_lat,
-            "lon": n.rx_lon,
+            "lat": round(n.rx_lat, 8),
+            "lon": round(n.rx_lon, 8),
             "alt_m": round(n.rx_alt_ft * 0.3048, 2),
-            "vel_east_ms": 0.0,
-            "vel_north_ms": 0.0,
-            "vel_up_ms": 0.0,
+            "vel_east_ms": round(n.rx_vel_enu[0] * 1000.0, 4),
+            "vel_north_ms": round(n.rx_vel_enu[1] * 1000.0, 4),
+            "vel_up_ms": round(n.rx_vel_enu[2] * 1000.0, 4),
+            "offset_east_m": round(offset_m[0], 3),
+            "offset_north_m": round(offset_m[1], 3),
         }
         for nid, n in world.nodes.items()
     }
 
 
-def record_run(exp: dict, run: dict, out_dir: str) -> dict:
-    """Record one run as fast as it computes; returns its fingerprint."""
+def record_run(exp: dict, run: dict, out_dir: str, motion: Motion | None = None, rx_doppler: bool = True) -> dict:
+    """Record one run as fast as it computes; returns its fingerprint.
+
+    ``motion`` moves every receiver along one trajectory (see motion.py);
+    ``rx_doppler`` False leaves the moving receiver's own Doppler out of the
+    measurements (not physical; isolates the geometric effect)."""
+    motion = motion or Motion()
     nodes_raw = fleet_nodes(exp)
     world = build_world(exp, run, nodes_raw)
+    world.rx_doppler = rx_doppler
+    origins = {c["node_id"]: (c["rx_lat"], c["rx_lon"], c["rx_alt_ft"] * 0.3048 / 1000.0) for c in nodes_raw}
     rec = RunRecorder(out_dir, nodes_raw)
     tick_s = exp.get("tick_s", 1.0)
     try:
         for i in range(1, int(round(exp["duration_s"] / tick_s)) + 1):
             world.step(tick_s)
+            de, dn, _, _ = place_receivers(world, origins, motion, i * tick_s)
             t_ms = exp["start_time_ms"] + int(round(i * tick_s * 1000))
             rec.truth(t_ms, world.aircraft)
-            rec.receiver(t_ms, receiver_pose(world))
+            rec.receiver(t_ms, receiver_pose(world, (de, dn)))
             for nid in world.nodes:
                 labels: list[dict] = []
                 frame = world.generate_detections_for_node(nid, t_ms, labels=labels)

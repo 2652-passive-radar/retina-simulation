@@ -76,3 +76,46 @@ def test_every_three_node_tick_is_solved_and_scored(run_dir):
 
 def test_offline_solve_is_deterministic(run_dir):
     assert offline_solve.solve_run(run_dir) == offline_solve.solve_run(run_dir)
+
+
+def test_geometric_mode_recovers_truth_under_receiver_motion_noise_free(tmp_path):
+    """Noise-free delay/Doppler from a receiver driving 4.5 km east, receiver
+    Doppler left out: told where the receiver is, the solver recovers the
+    aircraft; told it is still at home (S), it does not."""
+    from retina_simulation.motion import Motion
+
+    exp = experiment.load(_BASELINE)
+    d = str(tmp_path)
+    experiment.record_run(exp, exp["runs"][1], d, Motion("linear", speed_ms=15.0, heading_deg=90.0), rx_doppler=False)
+    with open(os.path.join(d, "nodes.json"), encoding="utf-8") as f:
+        nodes = json.load(f)
+    poses = offline_solve.receiver_poses(d)
+    truth, epochs = _true_measurements(d)
+    from retina_geolocator.multinode_solver import solve_multinode
+
+    err = {"geometric": [], "stationary": []}
+    for t, meas in list(epochs.items())[-20:]:
+        st = truth[t]
+        guess = {"lat": st["lat"], "lon": st["lon"], "alt_km": st["alt_m"] / 1000.0}
+        for mode, cfgs in (("geometric", offline_solve._at_pose(nodes, poses[t])), ("stationary", nodes)):
+            r = solve_multinode(
+                {"initial_guess": guess, "measurements": meas, "n_nodes": 3}, {n["node_id"]: n for n in cfgs}
+            )
+            e, n = offline_solve._en_m(st["lat"], st["lon"], r["lat"], r["lon"])
+            err[mode].append(math.hypot(e, n))
+    assert max(err["geometric"]) < 1.0
+    assert min(err["stationary"]) > 500.0
+
+
+def test_offline_solve_reports_receiver_offset_and_bias(tmp_path):
+    from retina_simulation.motion import Motion
+
+    exp = experiment.load(_BASELINE)
+    d = str(tmp_path)
+    experiment.record_run(exp, exp["runs"][1], d, Motion("linear", speed_ms=1.5, heading_deg=0.0))
+    rows = offline_solve.solve_run(d, receiver="geometric")
+    last = rows[-1]
+    assert last["rx_offset_m"] == pytest.approx(450.0, abs=0.5)
+    assert last["rx_offset_bearing_deg"] == pytest.approx(0.0, abs=0.1)
+    assert all(f"bias_us_{n}" in last for n in ("chan", "chek", "cisc"))
+    assert abs(last["bias_us_cisc"]) > 0.1

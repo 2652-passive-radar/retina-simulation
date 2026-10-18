@@ -272,6 +272,9 @@ class NodeConfig:
     # None keeps the older monostatic rule, so real hardware nodes carrying
     # only max_range_km are unaffected.
     max_bistatic_range_km: float | None = None
+    # Receiver platform velocity, km/s east/north/up (retina_simulation.motion
+    # moves rx_lat/rx_lon each tick and sets this).  Zero for a fixed site.
+    rx_vel_enu: tuple = (0.0, 0.0, 0.0)
 
 
 def config_hash(config: NodeConfig) -> str:
@@ -418,6 +421,23 @@ def _bistatic_doppler(target_enu, vel_enu, tx_enu, rx_enu, freq_hz):
     return (freq_hz / C_KM_S) * (v_rad_tx + v_rad_rx)
 
 
+def _receiver_doppler(target_enu, tx_enu, rx_vel_enu, freq_hz):
+    """The part of the measured Doppler a MOVING receiver adds, in Hz.
+
+    Frame centred on the receiver (target_enu, tx_enu relative to it).  The
+    measured Doppler is -(1/lambda) d/dt (|P-T| + |P-R| - |R-T|); with R moving
+    at v_R that adds (1/lambda) (u_RP + u_TR) . v_R, u_RP pointing from the
+    receiver to the target and u_TR from the transmitter to the receiver.
+    The u_TR half is the reference channel's own Doppler, which reaches the
+    measurement because the reference antenna rides the same platform."""
+    d_p = _norm(target_enu)
+    d_t = _norm(tx_enu)
+    if d_p < 1e-9 or d_t < 1e-9:
+        return 0.0
+    s = [target_enu[i] / d_p - tx_enu[i] / d_t for i in range(3)]
+    return (freq_hz / C_KM_S) * sum(s[i] * rx_vel_enu[i] for i in range(3))
+
+
 # ── Flight corridor route generation ─────────────────────────────────────────
 
 _NATIONWIDE_MIN_LEG_KM = 400.0
@@ -558,6 +578,10 @@ class SimulationWorld:
         # that alters how many draws one of them makes cannot shift another.
         self.rng_seed: str | None = None
         self._tick = 0
+        # Whether a moving receiver's own Doppler reaches the measurement.
+        # True is the physics; False isolates the geometric effect of motion
+        # for the receiver-motion study and is not physical.
+        self.rx_doppler = True
 
     def _rng(self, *key):
         """The stream for ``key``: a fresh seeded Random, or the global one."""
@@ -1222,6 +1246,8 @@ class SimulationWorld:
 
             delay = _bistatic_delay(target_enu, tx_enu, rx_enu)
             doppler = _bistatic_doppler(target_enu, vel_enu, tx_enu, rx_enu, node.fc_hz)
+            if self.rx_doppler and any(node.rx_vel_enu):
+                doppler += _receiver_doppler(target_enu, tx_enu, node.rx_vel_enu, node.fc_hz)
 
             # SNR depends on distance — compute before noise/miss decisions
             rng = self._rng("detection", node_id, self._tick, ac.object_id)

@@ -290,3 +290,92 @@ was found. Newest entries at the bottom of each step.
   velocity, with their own errors, and `pos_source`, `vel_source`,
   `rms_delay_us`, `epoch_skew_s` and an `adopted` flag are kept in
   `solves.csv`.
+
+## Step 1: receiver motion, offline (2026-10-18)
+
+### Built
+- `retina_simulation/motion.py`: a `Motion` (static, linear, oscillate,
+  circle) gives the platform's east/north offset from its registered position
+  R0 and its velocity at any time; `place_receivers` moves every node's
+  receiver to R0 + offset (WGS84) and sets its velocity. One platform, all
+  three channels on one trajectory; height held; beam fixed in the world.
+- `world.py`: `NodeConfig.rx_vel_enu`; the moving receiver's Doppler term
+  `(1/lambda)(u_RP + u_TR).v_R` added in `generate_detections_for_node`, behind
+  `SimulationWorld.rx_doppler` (on = physical; off isolates geometry). Delay,
+  SNR and the beam check follow the receiver automatically because they are
+  computed from the node's current position.
+- `experiment.py`: an experiment file can name a `base` and inherit its fleet,
+  flights and settings (only its own keys are saved back); `record_run` takes a
+  motion and the Doppler switch and logs the pose and offset every tick.
+- `experiments/receiver_motion.json`: 9 cases (static + linear east/north,
+  oscillate, circle x walk 1.5 m/s / vehicle 15 m/s), receiver Doppler off/on,
+  algorithms S and G; 17 recordings x 5 seeds, fingerprinted.
+- `tools/offline_solve.py --receiver stationary|geometric`: G solves each tick
+  with node configs (and the initial-guess grid) moved to that tick's receiver
+  pose. Each row also carries the receiver offset and, per channel,
+  `bias_us_<node>`: the true delay change caused by the receiver being off its
+  registered position.
+- `tools/motion_experiment.py` (run through `run_experiment.py`) and
+  `tools/motion_report.py`: record, check fingerprints, solve in parallel,
+  report.
+
+### Verified
+- `tests/test_receiver_motion.py` (17): each profile's velocity is the
+  derivative of its offset; peak speed; circle radius and closure; oscillate
+  amplitude; **the receiver Doppler term matches -(1/lambda) dRb/dt by finite
+  difference with aircraft and receiver both moving**; the study inherits the
+  baseline flights; **static reproduces the step 0 fingerprints**; the receiver
+  Doppler switch changes Doppler and nothing else.
+- `tests/test_offline_solve.py`: noise-free, receiver 4.5 km east: G recovers
+  the aircraft to < 1 m, S is > 500 m off; offset and per-channel bias reported.
+- Noise-free, true altitude: G's worst error 0.07 m on linear-east-vehicle,
+  circle-vehicle and linear-north-walk.
+- 266 tests pass.
+
+### Results (offline, 5 seeds; every solve counted, including rejected ones)
+
+| Case | S position RMSE | G position RMSE | S velocity RMSE (Doppler off / on) | G velocity RMSE (off / on) | S availability |
+|---|---|---|---|---|---|
+| static | 82 m | 82 m | 3.6 | 3.6 | 41% |
+| linear-east-walk | 469 m | 82 m | 5.0 / 5.4 | 3.6 / 3.9 | 41% |
+| linear-east-vehicle | 4,455 m | 82 m | 18.0 / 31.1 | 3.8 / 13.2 | 39% |
+| linear-north-walk | 220 m | 81 m | 3.3 / 3.5 | 3.6 / 3.8 | 41% |
+| linear-north-vehicle | 1,965 m | 83 m | 4.2 / 11.1 | 3.6 / 11.3 | 28% |
+| oscillate-walk | 91 m | 82 m | 3.6 / 3.7 | 3.6 / 3.7 | 41% |
+| oscillate-vehicle | 268 m | 82 m | 3.9 / 9.3 | 3.6 / 9.1 | 41% |
+| circle-walk | 124 m | 82 m | 3.7 / 3.9 | 3.6 / 3.7 | 41% |
+| circle-vehicle | 849 m | 81 m | 4.6 / 12.6 | 3.6 / 11.9 | 41% |
+
+(position RMSE is the same with the receiver Doppler off and on to < 1%)
+
+### Findings
+1. **Geometric compensation removes the geometric error completely.** G's
+   position RMSE is 81-83 m in every case, the static baseline's 81.8 m.
+2. **The stationary algorithm degrades with displacement, about 0.7-1.9 m of
+   position error per metre moved.** Over the last 30 s: walking north 356 m
+   at 450 m offset (0.8 m/m, as first-order theory predicted); walking east
+   824 m at 450 m (1.8 m/m); vehicle east 8.3 km at 4.5 km; vehicle north
+   3.2 km at 4.5 km.
+3. **Direction matters more than first-order theory said, because of the
+   altitude sweep.** East motion biases the delays so that S picks the 3 and
+   5 km altitude layers (aircraft at 1.1-2.7 km) in the last minute; north
+   motion leaves it at 1.5 km. The wrong altitude roughly doubles the
+   horizontal error. The circle shows the same thing directly: at a constant
+   716 m offset, S's error swings between ~500 m and ~1,300 m with direction,
+   peaking with the offset towards ~110 deg.
+4. **The publication gates barely catch it.** Driving 4.5 km east, S is
+   ~8 km off at the end yet only ~7 solves per seed are rejected; S keeps
+   publishing in 39% of seconds. Only the north-driving vehicle trips the
+   delay gate often (35 per seed, availability 41% -> 28%).
+5. **Errors follow the offset, not the history.** Oscillating, S's error
+   returns towards the baseline as the receiver passes home (walk 91 m RMSE
+   with +/-24 m excursions).
+6. **The receiver's own Doppler leaves position alone but spoils velocity.**
+   With it on, G's velocity RMSE rises from 3.6 m/s to 9-13 m/s at vehicle
+   speed (3.7-3.9 m/s walking). That is what receiver Doppler compensation,
+   the next step, has to remove.
+
+### Open items
+- Through the server: needs a per-frame receiver pose on the server side.
+- Next step: receiver Doppler compensation in the solver
+  (`f_meas = f_static + (1/lambda)(u_RP + u_TR).v_R`).

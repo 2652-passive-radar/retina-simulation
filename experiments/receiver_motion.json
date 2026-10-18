@@ -1,0 +1,899 @@
+{
+  "name": "receiver-motion",
+  "description": "Step 1 of the receiver-motion study: the step 0 flights with the receiver platform moving, solved offline by the stationary algorithm (S, receiver assumed at its registered position) and by geometric compensation (G, receiver position known every second). Every case runs with the moving receiver's own Doppler left out (isolates geometry) and included (physical).",
+  "base": "baseline_static.json",
+  "rx_doppler": [
+    false,
+    true
+  ],
+  "algorithms": [
+    "stationary",
+    "geometric"
+  ],
+  "cases": [
+    {
+      "id": "static",
+      "speed": "none",
+      "motion": {
+        "type": "static"
+      }
+    },
+    {
+      "id": "linear-east-walk",
+      "speed": "walk",
+      "motion": {
+        "type": "linear",
+        "speed_ms": 1.5,
+        "heading_deg": 90.0
+      }
+    },
+    {
+      "id": "linear-east-vehicle",
+      "speed": "vehicle",
+      "motion": {
+        "type": "linear",
+        "speed_ms": 15.0,
+        "heading_deg": 90.0
+      }
+    },
+    {
+      "id": "linear-north-walk",
+      "speed": "walk",
+      "motion": {
+        "type": "linear",
+        "speed_ms": 1.5,
+        "heading_deg": 0.0
+      }
+    },
+    {
+      "id": "linear-north-vehicle",
+      "speed": "vehicle",
+      "motion": {
+        "type": "linear",
+        "speed_ms": 15.0,
+        "heading_deg": 0.0
+      }
+    },
+    {
+      "id": "oscillate-walk",
+      "speed": "walk",
+      "motion": {
+        "type": "oscillate",
+        "speed_ms": 1.5,
+        "heading_deg": 90.0,
+        "period_s": 100.0
+      }
+    },
+    {
+      "id": "oscillate-vehicle",
+      "speed": "vehicle",
+      "motion": {
+        "type": "oscillate",
+        "speed_ms": 15.0,
+        "heading_deg": 90.0,
+        "period_s": 100.0
+      }
+    },
+    {
+      "id": "circle-walk",
+      "speed": "walk",
+      "motion": {
+        "type": "circle",
+        "speed_ms": 1.5,
+        "lap_s": 300.0,
+        "start_bearing_deg": 0.0
+      }
+    },
+    {
+      "id": "circle-vehicle",
+      "speed": "vehicle",
+      "motion": {
+        "type": "circle",
+        "speed_ms": 15.0,
+        "lap_s": 300.0,
+        "start_bearing_deg": 0.0
+      }
+    }
+  ],
+  "fingerprints": {
+    "static|doppler-off": {
+      "101": {
+        "frames": 900,
+        "detections": 1980,
+        "target_detections": 663,
+        "sum_delay_us": 93848.6,
+        "sum_doppler_hz": 18397.57,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2008,
+        "target_detections": 637,
+        "sum_delay_us": 81800.81,
+        "sum_doppler_hz": -47415.1,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77334.06,
+        "sum_doppler_hz": 40297.04,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71674.32,
+        "sum_doppler_hz": -54203.16,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 100312.52,
+        "sum_doppler_hz": -45368.07,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "linear-east-walk|doppler-off": {
+      "101": {
+        "frames": 900,
+        "detections": 1980,
+        "target_detections": 663,
+        "sum_delay_us": 93541.52,
+        "sum_doppler_hz": 18026.43,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2009,
+        "target_detections": 638,
+        "sum_delay_us": 81686.54,
+        "sum_doppler_hz": -47840.97,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 76999.38,
+        "sum_doppler_hz": 40775.71,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71353.33,
+        "sum_doppler_hz": -54556.56,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 99974.8,
+        "sum_doppler_hz": -45699.64,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "linear-east-walk|doppler-on": {
+      "101": {
+        "frames": 900,
+        "detections": 1980,
+        "target_detections": 663,
+        "sum_delay_us": 93541.52,
+        "sum_doppler_hz": 18518.43,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2009,
+        "target_detections": 638,
+        "sum_delay_us": 81686.54,
+        "sum_doppler_hz": -47634.65,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 76999.38,
+        "sum_doppler_hz": 41055.08,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71353.33,
+        "sum_doppler_hz": -54071.21,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 99974.8,
+        "sum_doppler_hz": -45161.6,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "linear-east-vehicle|doppler-off": {
+      "101": {
+        "frames": 900,
+        "detections": 1980,
+        "target_detections": 663,
+        "sum_delay_us": 90807.52,
+        "sum_doppler_hz": 14444.67,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2010,
+        "target_detections": 639,
+        "sum_delay_us": 80091.54,
+        "sum_doppler_hz": -49303.44,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1972,
+        "target_detections": 691,
+        "sum_delay_us": 74160.4,
+        "sum_doppler_hz": 45479.42,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2084,
+        "target_detections": 694,
+        "sum_delay_us": 69157.66,
+        "sum_doppler_hz": -58238.48,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1914,
+        "target_detections": 656,
+        "sum_delay_us": 97243.85,
+        "sum_doppler_hz": -48787.03,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "linear-east-vehicle|doppler-on": {
+      "101": {
+        "frames": 900,
+        "detections": 1980,
+        "target_detections": 663,
+        "sum_delay_us": 90807.52,
+        "sum_doppler_hz": 19219.35,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2010,
+        "target_detections": 639,
+        "sum_delay_us": 80091.54,
+        "sum_doppler_hz": -47600.26,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1972,
+        "target_detections": 691,
+        "sum_delay_us": 74160.4,
+        "sum_doppler_hz": 47879.96,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2084,
+        "target_detections": 694,
+        "sum_delay_us": 69157.66,
+        "sum_doppler_hz": -53486.48,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1914,
+        "target_detections": 656,
+        "sum_delay_us": 97243.85,
+        "sum_doppler_hz": -43347.36,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "linear-north-walk|doppler-off": {
+      "101": {
+        "frames": 900,
+        "detections": 1978,
+        "target_detections": 661,
+        "sum_delay_us": 93900.11,
+        "sum_doppler_hz": 18142.75,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2008,
+        "target_detections": 637,
+        "sum_delay_us": 82206.7,
+        "sum_doppler_hz": -47529.83,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77671.87,
+        "sum_doppler_hz": 40958.75,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71985.43,
+        "sum_doppler_hz": -54560.89,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 100612.95,
+        "sum_doppler_hz": -45764.23,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "linear-north-walk|doppler-on": {
+      "101": {
+        "frames": 900,
+        "detections": 1978,
+        "target_detections": 661,
+        "sum_delay_us": 93900.11,
+        "sum_doppler_hz": 17713.25,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2008,
+        "target_detections": 637,
+        "sum_delay_us": 82206.7,
+        "sum_doppler_hz": -48253.11,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77671.87,
+        "sum_doppler_hz": 40283.31,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71985.43,
+        "sum_doppler_hz": -55043.69,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 100612.95,
+        "sum_doppler_hz": -46106.17,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "linear-north-vehicle|doppler-off": {
+      "101": {
+        "frames": 900,
+        "detections": 1974,
+        "target_detections": 657,
+        "sum_delay_us": 96353.94,
+        "sum_doppler_hz": 15357.12,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2004,
+        "target_detections": 633,
+        "sum_delay_us": 85449.72,
+        "sum_doppler_hz": -48403.61,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1962,
+        "target_detections": 681,
+        "sum_delay_us": 80235.35,
+        "sum_doppler_hz": 46043.55,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2067,
+        "target_detections": 677,
+        "sum_delay_us": 74069.74,
+        "sum_doppler_hz": -56726.42,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1906,
+        "target_detections": 648,
+        "sum_delay_us": 102824.9,
+        "sum_doppler_hz": -48986.01,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "linear-north-vehicle|doppler-on": {
+      "101": {
+        "frames": 900,
+        "detections": 1974,
+        "target_detections": 657,
+        "sum_delay_us": 96353.94,
+        "sum_doppler_hz": 11311.49,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2004,
+        "target_detections": 633,
+        "sum_delay_us": 85449.72,
+        "sum_doppler_hz": -55326.49,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1962,
+        "target_detections": 681,
+        "sum_delay_us": 80235.35,
+        "sum_doppler_hz": 39199.33,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2067,
+        "target_detections": 677,
+        "sum_delay_us": 74069.74,
+        "sum_doppler_hz": -61609.67,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1906,
+        "target_detections": 648,
+        "sum_delay_us": 102824.9,
+        "sum_doppler_hz": -52247.13,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "oscillate-walk|doppler-off": {
+      "101": {
+        "frames": 900,
+        "detections": 1980,
+        "target_detections": 663,
+        "sum_delay_us": 93847.71,
+        "sum_doppler_hz": 18399.5,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2008,
+        "target_detections": 637,
+        "sum_delay_us": 81798.58,
+        "sum_doppler_hz": -47418.13,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77335.01,
+        "sum_doppler_hz": 40293.97,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71673.23,
+        "sum_doppler_hz": -54182.85,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 100310.29,
+        "sum_doppler_hz": -45366.01,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "oscillate-walk|doppler-on": {
+      "101": {
+        "frames": 900,
+        "detections": 1980,
+        "target_detections": 663,
+        "sum_delay_us": 93847.71,
+        "sum_doppler_hz": 18389.1,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2008,
+        "target_detections": 637,
+        "sum_delay_us": 81798.58,
+        "sum_doppler_hz": -47415.54,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77335.01,
+        "sum_doppler_hz": 40290.26,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71673.23,
+        "sum_doppler_hz": -54200.78,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 100310.29,
+        "sum_doppler_hz": -45390.63,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "oscillate-vehicle|doppler-off": {
+      "101": {
+        "frames": 900,
+        "detections": 1979,
+        "target_detections": 662,
+        "sum_delay_us": 93748.88,
+        "sum_doppler_hz": 18518.22,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2008,
+        "target_detections": 637,
+        "sum_delay_us": 81778.97,
+        "sum_doppler_hz": -47444.2,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77343.99,
+        "sum_doppler_hz": 40267.6,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71663.55,
+        "sum_doppler_hz": -53997.41,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 100289.49,
+        "sum_doppler_hz": -45349.4,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "oscillate-vehicle|doppler-on": {
+      "101": {
+        "frames": 900,
+        "detections": 1979,
+        "target_detections": 662,
+        "sum_delay_us": 93748.88,
+        "sum_doppler_hz": 18415.44,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2008,
+        "target_detections": 637,
+        "sum_delay_us": 81778.97,
+        "sum_doppler_hz": -47419.03,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77343.99,
+        "sum_doppler_hz": 40227.92,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71663.55,
+        "sum_doppler_hz": -54178.36,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 100289.49,
+        "sum_doppler_hz": -45593.42,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "circle-walk|doppler-off": {
+      "101": {
+        "frames": 900,
+        "detections": 1980,
+        "target_detections": 663,
+        "sum_delay_us": 93838.42,
+        "sum_doppler_hz": 18429.75,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2008,
+        "target_detections": 637,
+        "sum_delay_us": 81788.08,
+        "sum_doppler_hz": -47450.99,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77340.31,
+        "sum_doppler_hz": 40223.61,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71674.0,
+        "sum_doppler_hz": -54010.94,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 100301.36,
+        "sum_doppler_hz": -45322.26,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "circle-walk|doppler-on": {
+      "101": {
+        "frames": 900,
+        "detections": 1980,
+        "target_detections": 663,
+        "sum_delay_us": 93838.42,
+        "sum_doppler_hz": 18242.66,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2008,
+        "target_detections": 637,
+        "sum_delay_us": 81788.08,
+        "sum_doppler_hz": -47437.58,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77340.31,
+        "sum_doppler_hz": 40437.6,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71674.0,
+        "sum_doppler_hz": -54164.61,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1910,
+        "target_detections": 652,
+        "sum_delay_us": 100301.36,
+        "sum_doppler_hz": -45478.1,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "circle-vehicle|doppler-off": {
+      "101": {
+        "frames": 900,
+        "detections": 1978,
+        "target_detections": 661,
+        "sum_delay_us": 93462.09,
+        "sum_doppler_hz": 18856.03,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2009,
+        "target_detections": 638,
+        "sum_delay_us": 81767.78,
+        "sum_doppler_hz": -48010.62,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77398.8,
+        "sum_doppler_hz": 39552.02,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71679.48,
+        "sum_doppler_hz": -52253.39,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1912,
+        "target_detections": 654,
+        "sum_delay_us": 100341.31,
+        "sum_doppler_hz": -44864.67,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    },
+    "circle-vehicle|doppler-on": {
+      "101": {
+        "frames": 900,
+        "detections": 1978,
+        "target_detections": 661,
+        "sum_delay_us": 93462.09,
+        "sum_doppler_hz": 17047.78,
+        "end_lat": 49.056746,
+        "end_lon": -123.065183
+      },
+      "202": {
+        "frames": 900,
+        "detections": 2009,
+        "target_detections": 638,
+        "sum_delay_us": 81767.78,
+        "sum_doppler_hz": -47852.09,
+        "end_lat": 48.986804,
+        "end_lon": -123.054704
+      },
+      "303": {
+        "frames": 900,
+        "detections": 1969,
+        "target_detections": 688,
+        "sum_delay_us": 77398.8,
+        "sum_doppler_hz": 41670.71,
+        "end_lat": 49.230309,
+        "end_lon": -123.01448
+      },
+      "404": {
+        "frames": 900,
+        "detections": 2074,
+        "target_detections": 684,
+        "sum_delay_us": 71679.48,
+        "sum_doppler_hz": -53793.57,
+        "end_lat": 49.067457,
+        "end_lon": -123.079826
+      },
+      "505": {
+        "frames": 900,
+        "detections": 1912,
+        "target_detections": 654,
+        "sum_delay_us": 100341.31,
+        "sum_doppler_hz": -46440.96,
+        "end_lat": 49.035389,
+        "end_lon": -123.019993
+      }
+    }
+  }
+}

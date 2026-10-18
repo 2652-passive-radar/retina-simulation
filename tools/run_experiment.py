@@ -4,6 +4,7 @@ Usage (from the retina-simulation folder, with the backend's Python, which has
 retina_geolocator; matplotlib and shapely must be installed in it too)::
 
     python tools/run_experiment.py experiments/baseline_static.json
+    python tools/run_experiment.py experiments/receiver_motion.json      # step 1 (see motion_experiment.py)
     python tools/run_experiment.py experiments/baseline_static.json --system --backend-dir ../../backend
 
 Default (about a minute): records each seed without a server, solves it
@@ -162,9 +163,15 @@ def main() -> None:
         help="Rebuild the analysis and figures of an existing output folder (e.g. after an analysis fix) "
         "without recording or solving anything again",
     )
+    parser.add_argument("--jobs", type=int, help="Processes for the offline solves (default: all cores)")
     args = parser.parse_args()
 
     exp = experiment.load(args.experiment)
+    if "cases" in exp:
+        import motion_experiment
+
+        motion_experiment.run(exp, args, _REPO, _commit)
+        return
     if args.reanalyze:
         _reanalyze(exp, os.path.abspath(args.reanalyze))
         return

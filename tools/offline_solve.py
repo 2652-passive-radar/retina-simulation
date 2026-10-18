@@ -21,11 +21,13 @@ What it does differently, and why it is optimistic
       nodes' shared beam for the position and altitude layer whose bistatic
       delays best match the measured ones.  Truth is never used for it.
 
-Writes ``RUN/analysis/offline_solves.csv`` with one row per tick.
+Writes ``RUN/analysis/offline_solves.csv`` (``--receiver geometric``:
+``offline_solves_geometric.csv``) with one row per tick.
 
 Usage::
 
     python tools/offline_solve.py runs/x/seed-101 [--experiment experiments/baseline_static.json]
+    python tools/offline_solve.py runs/x/seed-101 --receiver geometric
 """
 
 import argparse
@@ -170,12 +172,71 @@ def solve_epoch(meas: list[dict], node_cfgs: dict, geo: Geometry, cfg: dict) -> 
     return best, guess, "published"
 
 
-def solve_run(run_dir: str, solver_cfg: dict | None = None) -> list[dict]:
+_WGS84_A_M = 6378137.0
+_WGS84_E2 = 6.69437999014e-3
+
+
+def _ecef_m(lat: float, lon: float, alt_m: float) -> tuple[float, float, float]:
+    phi, lam = math.radians(lat), math.radians(lon)
+    s = math.sin(phi)
+    n = _WGS84_A_M / math.sqrt(1.0 - _WGS84_E2 * s * s)
+    return (
+        (n + alt_m) * math.cos(phi) * math.cos(lam),
+        (n + alt_m) * math.cos(phi) * math.sin(lam),
+        (n * (1.0 - _WGS84_E2) + alt_m) * s,
+    )
+
+
+def _bistatic_range_m(p, rx, tx) -> float:
+    return math.dist(p, tx) + math.dist(p, rx) - math.dist(rx, tx)
+
+
+def _short(node_id: str) -> str:
+    return node_id.rsplit("-", 1)[-1]
+
+
+def receiver_poses(run_dir: str) -> dict[int, dict]:
+    """Each tick's receiver pose per node, from rx_trajectory.ndjson ({} if absent)."""
+    path = os.path.join(run_dir, "rx_trajectory.ndjson")
+    if not os.path.exists(path):
+        return {}
+    return {r["t_ms"]: r["rx"] for r in _read_ndjson(path)}
+
+
+def _at_pose(nodes: list[dict], pose: dict) -> list[dict]:
+    """Node configs with each receiver moved to its pose this tick."""
+    return [
+        dict(n, rx_lat=pose[n["node_id"]]["lat"], rx_lon=pose[n["node_id"]]["lon"],
+             rx_alt_ft=pose[n["node_id"]]["alt_m"] / 0.3048)
+        if n["node_id"] in pose else n
+        for n in nodes
+    ]  # fmt: skip
+
+
+def solve_run(run_dir: str, solver_cfg: dict | None = None, receiver: str = "stationary") -> list[dict]:
+    """Solve every tick of a recording.
+
+    ``receiver`` says what the solver is told about where the receivers are:
+    ``stationary`` (S), their registered position from nodes.json, as the
+    server does today; ``geometric`` (G), their true position that tick from
+    rx_trajectory.ndjson, i.e. geometric compensation.  On a recording without
+    receiver motion the two are identical.
+
+    Each row also carries the receiver's offset from its registered position
+    and, per node, ``bias_us_<node>``: how far the true bistatic delay that
+    tick differs from the delay the same aircraft would give a receiver at its
+    registered position, which is the error S builds its solve on.
+    """
+    if receiver not in ("stationary", "geometric"):
+        raise ValueError(f"unknown receiver mode {receiver!r}")
     cfg = {**DEFAULT_SOLVER, **(solver_cfg or {})}
     with open(os.path.join(run_dir, "nodes.json"), encoding="utf-8") as f:
         nodes = json.load(f)
     node_cfgs = {n["node_id"]: n for n in nodes}
     geo = Geometry(nodes)
+    poses = receiver_poses(run_dir)
+    tx_ecef = {n["node_id"]: _ecef_m(n["tx_lat"], n["tx_lon"], n["tx_alt_ft"] * 0.3048) for n in nodes}
+    rx0_ecef = {n["node_id"]: _ecef_m(n["rx_lat"], n["rx_lon"], n["rx_alt_ft"] * 0.3048) for n in nodes}
     truth = {t["t_ms"]: t["aircraft"][0] for t in _read_ndjson(os.path.join(run_dir, "truth.ndjson")) if t["aircraft"]}
     by_t: dict[int, list[dict]] = {}
     for fr in _read_ndjson(os.path.join(run_dir, "frames.ndjson")):
@@ -199,6 +260,13 @@ def solve_run(run_dir: str, solver_cfg: dict | None = None) -> list[dict]:
                     )
                     adsb = adsb or d.get("adsb")
         row = {"t_ms": t_ms, "t_s": round((t_ms - t_first) / 1000.0 + 1.0, 3), "n_nodes": len(meas)}
+        pose = poses.get(t_ms) or {}
+        if pose:
+            first = next(iter(pose.values()))
+            oe, on = first.get("offset_east_m", 0.0), first.get("offset_north_m", 0.0)
+            row["rx_offset_m"] = round(math.hypot(oe, on), 2)
+            row["rx_offset_bearing_deg"] = round(math.degrees(math.atan2(oe, on)) % 360, 1) if (oe or on) else None
+            row["rx_speed_ms"] = round(math.hypot(first["vel_east_ms"], first["vel_north_ms"]), 3)
         if st:
             row.update(
                 {
@@ -209,11 +277,20 @@ def solve_run(run_dir: str, solver_cfg: dict | None = None) -> list[dict]:
                     "true_vel_north_ms": st["vel_north_ms"],
                 }
             )
+            p = _ecef_m(st["lat"], st["lon"], st["alt_m"])
+            for nid, rx0 in rx0_ecef.items():
+                rx_t = _ecef_m(pose[nid]["lat"], pose[nid]["lon"], pose[nid]["alt_m"]) if nid in pose else rx0
+                bias_m = _bistatic_range_m(p, rx_t, tx_ecef[nid]) - _bistatic_range_m(p, rx0, tx_ecef[nid])
+                row[f"bias_us_{_short(nid)}"] = round(bias_m / (_C_KM_US * 1000.0), 4)
         if not st or len(meas) < cfg["min_nodes"]:
             row.update(published=False, reason=f"n_nodes<{cfg['min_nodes']}")
             rows.append(row)
             continue
-        res, guess, reason = solve_epoch(meas, node_cfgs, geo, cfg)
+        if receiver == "geometric" and pose:
+            moved = _at_pose(nodes, pose)
+            res, guess, reason = solve_epoch(meas, {n["node_id"]: n for n in moved}, Geometry(moved), cfg)
+        else:
+            res, guess, reason = solve_epoch(meas, node_cfgs, geo, cfg)
         row.update(published=reason == "published", reason=reason)
         ge, gn = _en_m(st["lat"], st["lon"], guess["lat"], guess["lon"])
         row["guess_err_horiz_m"] = round(math.hypot(ge, gn), 1)
@@ -249,12 +326,13 @@ def solve_run(run_dir: str, solver_cfg: dict | None = None) -> list[dict]:
     return rows
 
 
-def write_rows(run_dir: str, rows: list[dict]) -> str:
+def write_rows(run_dir: str, rows: list[dict], name: str = "offline_solves.csv") -> str:
     out = os.path.join(run_dir, "analysis")
     os.makedirs(out, exist_ok=True)
-    path = os.path.join(out, "offline_solves.csv")
+    path = os.path.join(out, name)
+    extra = sorted({k for r in rows for k in r} - set(FIELDS))
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
+        writer = csv.DictWriter(f, fieldnames=FIELDS + extra)
         writer.writeheader()
         writer.writerows(rows)
     return path
@@ -264,13 +342,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Offline radar-only solves of a recorded run")
     parser.add_argument("run_dir")
     parser.add_argument("--experiment", help="Experiment file whose 'solver' block to use")
+    parser.add_argument(
+        "--receiver",
+        choices=("stationary", "geometric"),
+        default="stationary",
+        help="Receiver position given to the solver: registered (stationary) or true each tick (geometric)",
+    )
     args = parser.parse_args()
     solver_cfg = None
     if args.experiment:
         with open(args.experiment, encoding="utf-8") as f:
             solver_cfg = json.load(f).get("solver")
-    rows = solve_run(args.run_dir, solver_cfg)
-    path = write_rows(args.run_dir, rows)
+    rows = solve_run(args.run_dir, solver_cfg, args.receiver)
+    name = "offline_solves.csv" if args.receiver == "stationary" else "offline_solves_geometric.csv"
+    path = write_rows(args.run_dir, rows, name)
     pub = [r for r in rows if r.get("published")]
     print(f"{len(pub)}/{len(rows)} ticks published; wrote {path}")
 
