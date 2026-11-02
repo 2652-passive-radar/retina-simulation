@@ -392,3 +392,102 @@ was found. Newest entries at the bottom of each step.
   multiprocessing at all.
 - Checked: a deliberately crashing worker is recovered from and gives the same
   summary as a single-process run.
+
+## Step 2: receiver Doppler compensation, offline (2026-11-02)
+
+### Decided with you
+- GD = G + receiver Doppler compensation, done in the offline solve
+  (option a): no change to `retina-geolocator`, so G and GD share the exact
+  solver and differ only by the correction. Putting the receiver velocity
+  into the geolocator's own Doppler model (option b) waits for the server
+  step; it should then reproduce these results to ~0.2 Hz.
+- Receiver trajectory known exactly here. GNSS errors and a Kalman filter that
+  estimates the receiver's velocity from GNSS move to step 3.
+- Receiver Doppler on only (the physical case), for every algorithm. Altitude
+  by sweep, as in steps 0 and 1.
+
+### Built
+- `tools/offline_solve.py --receiver geometric_doppler`, per epoch:
+  - solve as G (receiver at its true pose);
+  - for each channel, `df = (fc/c)(u_RP + u_TR) . v_R` at G's solved
+    position, from the receiver's true velocity (`rx_trajectory.ndjson`);
+    the same term the simulator adds (`world._receiver_doppler`);
+  - subtract `df` from the measured Doppler and solve again (full sweep).
+  - Delay is not corrected: in one ~1 s capture the receiver moves ~15 m at
+    vehicle speed, against ~150 m of delay resolution.
+  - Every row now carries `rxdop_true_hz_<node>` (the receiver Doppler in the
+    measurement, at the true aircraft position); GD rows add
+    `rxdop_corr_hz_<node>` (what was subtracted).
+  - `rx_doppler_passes` (solver setting, default 1) repeats the correction.
+- `experiments/receiver_doppler.json`: `base` = `receiver_motion.json`,
+  receiver Doppler on, algorithms S, G, GD. Reuses the step 1 recordings;
+  only the static case gained a new fingerprint (`static|doppler-on`), and it
+  is identical to the step 1 `static|doppler-off` one.
+- `tools/motion_report.py`: GD everywhere (aqua), the overview as one row per
+  Doppler setting, and two new figures: `velocity_vs_speed.png`,
+  `doppler_correction.png`. Step 1's report rebuilds unchanged.
+
+### Verified
+- `tests/test_receiver_doppler.py` (7):
+  - the correction equals the simulator's receiver Doppler term (to 1e-6);
+  - static receiver: GD gives exactly G's solves, correction 0;
+  - noise-free, 15 m/s east: G velocity RMSE > 3 m/s, GD < 0.5 m/s, same
+    position;
+  - correction within 0.2 Hz RMS of the true receiver Doppler;
+  - one pass vs two: velocity differs by < 0.1 m/s;
+  - deterministic.
+
+### Results (offline, 5 seeds, receiver Doppler on; every solve counted)
+
+| Case | S pos | G pos | GD pos | S vel | G vel | GD vel | Target: G vel, Doppler off (step 1) |
+|---|---|---|---|---|---|---|---|
+| static | 82 m | 82 m | 82 m | 3.56 | 3.56 | 3.56 | 3.56 |
+| linear-east-walk | 469 m | 82 m | 82 m | 5.36 | 3.90 | 3.58 | 3.58 |
+| linear-east-vehicle | 4,467 m | 82 m | 82 m | 31.07 | 13.17 | 3.80 | 3.80 |
+| linear-north-walk | 220 m | 81 m | 81 m | 3.50 | 3.76 | 3.57 | 3.57 |
+| linear-north-vehicle | 1,965 m | 83 m | 83 m | 11.12 | 11.28 | 3.63 | 3.63 |
+| oscillate-walk | 91 m | 82 m | 82 m | 3.73 | 3.69 | 3.56 | 3.56 |
+| oscillate-vehicle | 268 m | 82 m | 82 m | 9.35 | 9.12 | 3.57 | 3.57 |
+| circle-walk | 124 m | 82 m | 82 m | 3.85 | 3.73 | 3.55 | 3.55 |
+| circle-vehicle | 849 m | 81 m | 81 m | 12.63 | 11.95 | 3.57 | 3.57 |
+
+(velocity RMSE in m/s; availability unchanged from step 1: 41%, S 39% east
+vehicle and 28% north vehicle)
+
+| Case | RMS receiver Doppler (Hz) | RMS correction error (Hz) |
+|---|---|---|
+| walking cases | 0.8-1.7 | 0.005-0.008 |
+| linear-east-vehicle | 11.1 | 0.081 |
+| linear-north-vehicle | 16.3 | 0.072 |
+| oscillate-vehicle | 7.7 | 0.052 |
+| circle-vehicle | 14.1 | 0.067 |
+
+### Findings
+1. **GD removes the receiver Doppler completely.** In every case GD's velocity
+   RMSE equals G's with the receiver Doppler left out of the simulation
+   (step 1), to 0.01 m/s, and sits at the static baseline (3.56-3.80 m/s).
+   At vehicle speed that is 9-13 m/s -> 3.6-3.8 m/s.
+2. **Position is untouched.** GD's position RMSE equals G's to 0.1 m: the
+   sweep picks altitude by delay residual, and the corrected Doppler only
+   moves the velocity.
+3. **Velocity error no longer depends on receiver speed.** G's grows almost
+   linearly with the receiver's speed (3.5 m/s at rest to ~12.5 m/s at
+   15 m/s, `velocity_vs_speed.png`); GD stays at 3.3-4.3 m/s across the whole
+   range.
+4. **The one-pass correction is far more accurate than it needs to be.**
+   RMS error 0.005-0.08 Hz, 25-400x below the 2 Hz Doppler noise, because
+   G's ~80 m position error barely tilts the unit vectors.
+5. **The FM channel's receiver Doppler is not smaller in Hz, against my
+   earlier prediction.** Its ~5x longer wavelength is offset by geometry:
+   the tower is north-west, so driving east (or circling) moves the receiver
+   nearly straight away from it and towards the aircraft, and
+   `|u_RP + u_TR|` is close to 2. Its *correction error* is ~5x smaller, as
+   the wavelength predicts (same angular error, 5x fewer Hz per m/s).
+6. **No Doppler-gate rejections** for any algorithm; delay-gate rejections are
+   S's only, as in step 1.
+
+### Next (not started; your go-ahead first)
+- Step 3: GNSS errors on the pose given to G and GD (position and velocity
+  noise, rate, latency, dropouts, lever arm), and a Kalman filter that
+  estimates the receiver's position and velocity from GNSS, compared against
+  raw GNSS and against the known trajectory of this step.

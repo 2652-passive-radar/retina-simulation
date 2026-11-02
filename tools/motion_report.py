@@ -400,10 +400,11 @@ def plot_doppler_correction(path, title, by_case: dict[str, list[dict]]):
         if log:
             ax.set_yscale("log")
             ax.axhline(2.0, color=INK, linestyle=(0, (5, 3)), linewidth=1.2, label="Doppler measurement noise (2 Hz)")
+            ax.set_ylim(top=100)
         ax.set_xticks(x)
         ax.set_xticklabels(cases, rotation=35, ha="right", fontsize=8.5)
         ax.set_ylabel(label, color=INK, fontsize=9.5)
-        ax.legend(loc="upper left", fontsize=8.5, frameon=False, labelcolor=INK_2)
+        ax.legend(loc="upper left", fontsize=8.5, frameon=False, labelcolor=INK_2, ncol=2)
     fig.suptitle(title, color=INK, fontsize=12, x=0.02, ha="left")
     fig.text(
         0.02,

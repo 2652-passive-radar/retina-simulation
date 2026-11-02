@@ -119,14 +119,14 @@ def solve_all(exp: dict, out: str, jobs: int | None) -> None:
 
 def print_means(summary: list[dict]) -> None:
     print()
-    print(f"{'case':<22} {'Doppler':<8} {'algorithm':<11} {'pos RMSE m':>11} {'vel RMSE m/s':>13} {'avail':>6}")
+    print(f"{'case':<22} {'Doppler':<8} {'algorithm':<18} {'pos RMSE m':>11} {'vel RMSE m/s':>13} {'avail':>6}")
     for r in summary:
         if r["seed"] != "mean":
             continue
         pos = "-" if r["pos_rmse_m"] is None else f"{r['pos_rmse_m']:.1f}"
         vel = "-" if r["vel_rmse_ms"] is None else f"{r['vel_rmse_ms']:.2f}"
         avail = "-" if r["availability"] is None else f"{r['availability']:.0%}"
-        print(f"{r['case']:<22} {r['rx_doppler']:<8} {r['algorithm']:<11} {pos:>11} {vel:>13} {avail:>6}")
+        print(f"{r['case']:<22} {r['rx_doppler']:<8} {r['algorithm']:<18} {pos:>11} {vel:>13} {avail:>6}")
 
 
 def run(exp: dict, args, repo: str, commit) -> None:
