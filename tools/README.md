@@ -227,3 +227,37 @@ tables of an existing run.
 
 One recording can also be solved by hand:
 `tools\offline_solve.py <seed folder> --receiver geometric`.
+
+## Step 2: receiver Doppler compensation (offline)
+
+`experiments/receiver_doppler.json` reuses step 1 (it names
+`receiver_motion.json` as its `base`), keeps only the physical recordings
+(receiver Doppler on) and adds a third algorithm, GD: geometric compensation
+with each channel's receiver Doppler, (fc/c)(u_RP + u_TR) . v_R, removed from
+the measured Doppler before the solve. The correction is computed from the
+receiver's true velocity at G's solved position, then the epoch is solved
+again. The recordings are the step 1 ones, checked against the stored
+fingerprints.
+
+```
+cd "$root\libs\retina-simulation"
+..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\receiver_doppler.json --out C:\radar-runs\receiver-doppler
+```
+
+Same options as step 1 (`--jobs`, `--reanalyze <folder>`); leave `--out` off
+for `runs\receiver-doppler\<date_time>\`. The output has the step 1 layout
+(`overview.png`, `summary.csv`, `receiver_paths.png`, `paths_map.png`,
+`cases\<case>\rmse_vs_time_doppler-on.png`, `cases\<case>\error_vs_offset.png`,
+with every recording under `cases\<case>\doppler-on\seed-<n>\`) with GD added
+everywhere, plus:
+
+| File | Holds |
+|---|---|
+| `velocity_vs_speed.png` | velocity RMSE against the receiver's speed at the time, every moving case pooled |
+| `doppler_correction.png` | each channel's receiver Doppler, and how far GD's correction was from it |
+| `summary.csv` columns `rxdop_rms_hz`, `rxdop_corr_err_rms_hz` | the same two numbers per case and seed |
+
+Each solve file also carries, per channel, `rxdop_true_hz_<node>` (the receiver
+Doppler in that measurement) and, for GD, `rxdop_corr_hz_<node>` (what GD
+subtracted). One recording by hand:
+`tools\offline_solve.py <seed folder> --receiver geometric_doppler`.

@@ -22,12 +22,14 @@ What it does differently, and why it is optimistic
       delays best match the measured ones.  Truth is never used for it.
 
 Writes ``RUN/analysis/offline_solves.csv`` (``--receiver geometric``:
-``offline_solves_geometric.csv``) with one row per tick.
+``offline_solves_geometric.csv``; ``--receiver geometric_doppler``:
+``offline_solves_geometric_doppler.csv``) with one row per tick.
 
 Usage::
 
     python tools/offline_solve.py runs/x/seed-101 [--experiment experiments/baseline_static.json]
     python tools/offline_solve.py runs/x/seed-101 --receiver geometric
+    python tools/offline_solve.py runs/x/seed-101 --receiver geometric_doppler
 """
 
 import argparse
@@ -48,6 +50,7 @@ except ImportError as exc:  # pragma: no cover - environment problem, not logic
 
 _R_EARTH_KM = 6371.0
 _C_KM_US = 0.299792458
+_C_M_S = 299792458.0
 _KT_TO_MS = 0.514444
 _GRID_HALF_KM = 60.0
 _GRID_STEP_KM = 0.5
@@ -59,7 +62,10 @@ DEFAULT_SOLVER = {
     "rms_doppler_max_hz_n3": 60.0,
     "rms_doppler_max_hz": 200.0,
     "min_nodes": 3,
+    "rx_doppler_passes": 1,
 }
+
+RECEIVER_MODES = ("stationary", "geometric", "geometric_doppler")
 
 FIELDS = [
     "t_ms", "t_s", "n_nodes", "published", "reason",
@@ -213,21 +219,82 @@ def _at_pose(nodes: list[dict], pose: dict) -> list[dict]:
     ]  # fmt: skip
 
 
+def _enu_to_ecef_vec(lat: float, lon: float, e: float, n: float, u: float) -> tuple[float, float, float]:
+    phi, lam = math.radians(lat), math.radians(lon)
+    sp, cp, sl, cl = math.sin(phi), math.cos(phi), math.sin(lam), math.cos(lam)
+    return (-sl * e - sp * cl * n + cp * cl * u, cl * e - sp * sl * n + cp * sl * u, cp * n + sp * u)
+
+
+def _unit(a, b) -> tuple[float, float, float]:
+    """Unit vector from a to b."""
+    d = math.dist(a, b)
+    return tuple((bi - ai) / d for ai, bi in zip(a, b))
+
+
+def receiver_doppler_hz(p_ecef, rx_ecef, tx_ecef, rx_vel_ecef, fc_hz: float) -> float:
+    """The Doppler a receiver moving at ``rx_vel_ecef`` (m/s) adds to its own
+    measurement, Hz: (fc/c) (u_RP + u_TR) . v_R, u_RP pointing from the
+    receiver to the aircraft and u_TR from the tower to the receiver.  The
+    simulator adds exactly this (world._receiver_doppler)."""
+    u_rp, u_tr = _unit(rx_ecef, p_ecef), _unit(tx_ecef, rx_ecef)
+    return fc_hz / _C_M_S * sum((a + b) * v for a, b, v in zip(u_rp, u_tr, rx_vel_ecef))
+
+
+def _pose_ecef(pose: dict) -> tuple[tuple, tuple]:
+    pos = _ecef_m(pose["lat"], pose["lon"], pose["alt_m"])
+    vel = _enu_to_ecef_vec(
+        pose["lat"], pose["lon"], pose["vel_east_ms"], pose["vel_north_ms"], pose.get("vel_up_ms", 0.0)
+    )
+    return pos, vel
+
+
+def _doppler_corrections(p_ecef, nodes: list[dict], pose: dict) -> dict[str, float]:
+    """Each node's receiver Doppler for an aircraft at ``p_ecef``, Hz."""
+    out = {}
+    for n in nodes:
+        rx, vel = _pose_ecef(pose[n["node_id"]])
+        tx = _ecef_m(n["tx_lat"], n["tx_lon"], n["tx_alt_ft"] * 0.3048)
+        out[n["node_id"]] = receiver_doppler_hz(p_ecef, rx, tx, vel, n["fc_hz"])
+    return out
+
+
+def _solve_doppler_compensated(meas: list[dict], moved: list[dict], pose: dict, cfg: dict):
+    """GD: solve as G, remove each channel's receiver Doppler evaluated at that
+    solve, and solve again (``rx_doppler_passes`` times).  Delay needs no
+    correction: in one ~1 s capture the receiver moves ~15 m at vehicle speed,
+    against ~150 m of delay resolution.  Returns the last pass's result and the
+    corrections it used."""
+    cfgs, geo = {n["node_id"]: n for n in moved}, Geometry(moved)
+    res, guess, reason = solve_epoch(meas, cfgs, geo, cfg)
+    corr: dict[str, float] = {}
+    for _ in range(cfg["rx_doppler_passes"]):
+        at = res or {"lat": guess["lat"], "lon": guess["lon"], "alt_m": guess["alt_km"] * 1000.0}
+        corr = _doppler_corrections(_ecef_m(at["lat"], at["lon"], at["alt_m"]), moved, pose)
+        fixed = [dict(m, doppler_hz=m["doppler_hz"] - corr[m["node_id"]]) for m in meas]
+        res, _, reason = solve_epoch(fixed, cfgs, geo, cfg)
+    return res, guess, reason, corr
+
+
 def solve_run(run_dir: str, solver_cfg: dict | None = None, receiver: str = "stationary") -> list[dict]:
     """Solve every tick of a recording.
 
     ``receiver`` says what the solver is told about where the receivers are:
     ``stationary`` (S), their registered position from nodes.json, as the
     server does today; ``geometric`` (G), their true position that tick from
-    rx_trajectory.ndjson, i.e. geometric compensation.  On a recording without
-    receiver motion the two are identical.
+    rx_trajectory.ndjson, i.e. geometric compensation; ``geometric_doppler``
+    (GD), G with each channel's receiver Doppler, computed from the receiver's
+    true velocity, removed from the measured Doppler.  On a recording without
+    receiver motion all three are identical.
 
     Each row also carries the receiver's offset from its registered position
     and, per node, ``bias_us_<node>``: how far the true bistatic delay that
     tick differs from the delay the same aircraft would give a receiver at its
-    registered position, which is the error S builds its solve on.
+    registered position, which is the error S builds its solve on, and
+    ``rxdop_true_hz_<node>``: the receiver Doppler in that node's measurement,
+    from the true aircraft position.  GD rows add ``rxdop_corr_hz_<node>``,
+    the correction GD subtracted.
     """
-    if receiver not in ("stationary", "geometric"):
+    if receiver not in RECEIVER_MODES:
         raise ValueError(f"unknown receiver mode {receiver!r}")
     cfg = {**DEFAULT_SOLVER, **(solver_cfg or {})}
     with open(os.path.join(run_dir, "nodes.json"), encoding="utf-8") as f:
@@ -282,11 +349,18 @@ def solve_run(run_dir: str, solver_cfg: dict | None = None, receiver: str = "sta
                 rx_t = _ecef_m(pose[nid]["lat"], pose[nid]["lon"], pose[nid]["alt_m"]) if nid in pose else rx0
                 bias_m = _bistatic_range_m(p, rx_t, tx_ecef[nid]) - _bistatic_range_m(p, rx0, tx_ecef[nid])
                 row[f"bias_us_{_short(nid)}"] = round(bias_m / (_C_KM_US * 1000.0), 4)
+            if pose:
+                for nid, f in _doppler_corrections(p, nodes, pose).items():
+                    row[f"rxdop_true_hz_{_short(nid)}"] = round(f, 3)
         if not st or len(meas) < cfg["min_nodes"]:
             row.update(published=False, reason=f"n_nodes<{cfg['min_nodes']}")
             rows.append(row)
             continue
-        if receiver == "geometric" and pose:
+        if receiver == "geometric_doppler" and pose:
+            res, guess, reason, corr = _solve_doppler_compensated(meas, _at_pose(nodes, pose), pose, cfg)
+            for nid, f in corr.items():
+                row[f"rxdop_corr_hz_{_short(nid)}"] = round(f, 3)
+        elif receiver != "stationary" and pose:
             moved = _at_pose(nodes, pose)
             res, guess, reason = solve_epoch(meas, {n["node_id"]: n for n in moved}, Geometry(moved), cfg)
         else:
@@ -344,9 +418,10 @@ def main() -> None:
     parser.add_argument("--experiment", help="Experiment file whose 'solver' block to use")
     parser.add_argument(
         "--receiver",
-        choices=("stationary", "geometric"),
+        choices=RECEIVER_MODES,
         default="stationary",
-        help="Receiver position given to the solver: registered (stationary) or true each tick (geometric)",
+        help="Receiver position given to the solver: registered (stationary), true each tick (geometric), "
+        "or true each tick with its own Doppler removed (geometric_doppler)",
     )
     args = parser.parse_args()
     solver_cfg = None
@@ -354,7 +429,7 @@ def main() -> None:
         with open(args.experiment, encoding="utf-8") as f:
             solver_cfg = json.load(f).get("solver")
     rows = solve_run(args.run_dir, solver_cfg, args.receiver)
-    name = "offline_solves.csv" if args.receiver == "stationary" else "offline_solves_geometric.csv"
+    name = "offline_solves.csv" if args.receiver == "stationary" else f"offline_solves_{args.receiver}.csv"
     path = write_rows(args.run_dir, rows, name)
     pub = [r for r in rows if r.get("published")]
     print(f"{len(pub)}/{len(rows)} ticks published; wrote {path}")

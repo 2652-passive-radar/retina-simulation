@@ -1,17 +1,25 @@
-"""Figures and tables for the receiver-motion study (experiments/receiver_motion.json).
+"""Figures and tables for the receiver-motion study (experiments/receiver_motion.json,
+experiments/receiver_doppler.json).
 
 Reads ``cases/<case>/doppler-<off|on>/seed-<n>/analysis/offline_solves_<algorithm>.csv``
 under one output folder and writes, beside ``cases/``:
 
 ``summary.csv``          one row per case x receiver-Doppler setting x algorithm
                          x seed, plus a mean row per case/setting/algorithm
-``overview.png``         position and velocity RMSE of every moving case, S beside
-                         G, against the static baseline; receiver Doppler off
-                         (top) and on (bottom)
+``overview.png``         position and velocity RMSE of every moving case, one bar
+                         per algorithm, against the static baseline; one row per
+                         receiver-Doppler setting the experiment runs
 ``receiver_paths.png``   the receiver trajectories, walking and vehicle
 ``paths_map.png``        the flights (as in step 0)
 
-and in each case folder ``rmse_vs_time.png`` (S, G and the static baseline,
+and, when the experiment runs GD (geometric_doppler):
+
+``velocity_vs_speed.png``  velocity RMSE against the receiver's speed at the time,
+                           every moving case pooled
+``doppler_correction.png`` the receiver Doppler in each channel, and how far GD's
+                           correction was from it
+
+and in each case folder ``rmse_vs_time_doppler-<off|on>.png`` (every algorithm and the static baseline,
 mean over seeds with the seed range shaded) and ``error_vs_offset.png`` (every
 solve's position error against how far the receiver was from its registered
 position).
@@ -50,9 +58,15 @@ from experiment_report import (  # noqa: E402
     windowed,
 )
 
-ALGORITHMS = ("stationary", "geometric")
-ALG_LABEL = {"stationary": "S: stationary", "geometric": "G: geometric compensation"}
-ALG_COLOUR = {"stationary": "#eb6834", "geometric": "#2a78d6"}
+ALGORITHMS = ("stationary", "geometric", "geometric_doppler")
+ALG_LABEL = {
+    "stationary": "S: stationary",
+    "geometric": "G: geometric compensation",
+    "geometric_doppler": "GD: geometric + receiver Doppler compensation",
+}
+ALG_SHORT = {"stationary": "S", "geometric": "G", "geometric_doppler": "GD"}
+ALG_COLOUR = {"stationary": "#eb6834", "geometric": "#2a78d6", "geometric_doppler": "#1baf7a"}
+CHANNEL_COLOUR = ("#2a78d6", "#eb6834", "#1baf7a")
 BASELINE_COLOUR = MUTED
 PROFILE_COLOUR = {"linear-east": "#1baf7a", "linear-north": "#eda100", "oscillate": "#e87ba4", "circle": "#6250d6"}
 
@@ -60,7 +74,7 @@ SUMMARY_FIELDS = [
     "case", "speed", "rx_doppler", "algorithm", "seed", "ticks", "solved", "published", "availability",
     "pos_rmse_m", "pos_median_m", "pos_p95_m", "vel_rmse_ms", "vel_median_ms",
     "pos_rmse_published_m", "vel_rmse_published_ms", "rejected_rms_delay", "rejected_rms_doppler",
-    "end_offset_m", "pos_err_last30s_m",
+    "end_offset_m", "pos_err_last30s_m", "rxdop_rms_hz", "rxdop_corr_err_rms_hz",
 ]  # fmt: skip
 
 
@@ -69,8 +83,10 @@ def doppler_dir(on: bool) -> str:
 
 
 def dopplers_for(exp: dict, case: dict) -> list[bool]:
-    """A static receiver has no Doppler of its own: one setting is enough."""
-    return [False] if case["motion"].get("type", "static") == "static" else list(exp.get("rx_doppler", [False]))
+    """A static receiver has no Doppler of its own: one setting is enough, the
+    experiment's first (off in step 1, on in step 2; the recording is the same)."""
+    settings = list(exp.get("rx_doppler", [False]))
+    return settings[:1] if case["motion"].get("type", "static") == "static" else settings
 
 
 def seed_dir(out: str, case_id: str, doppler: bool, seed: int) -> str:
@@ -93,9 +109,20 @@ def load(seed_path: str, algorithm: str) -> list[dict]:
             "vel": _f(r.get("verr_horiz_ms")),
             "offset": _f(r.get("rx_offset_m")) or 0.0,
             "bearing": _f(r.get("rx_offset_bearing_deg")),
+            "speed": _f(r.get("rx_speed_ms")) or 0.0,
+            "rxdop": {
+                k[len("rxdop_true_hz_") :]: float(v) for k, v in r.items() if k.startswith("rxdop_true_hz_") and v
+            },
+            "rxcorr": {
+                k[len("rxdop_corr_hz_") :]: float(v) for k, v in r.items() if k.startswith("rxdop_corr_hz_") and v
+            },
         }
         for r in rows
     ]
+
+
+def _corr_errors(rows: list[dict]) -> list[float]:
+    return [r["rxcorr"][c] - r["rxdop"][c] for r in rows for c in r["rxcorr"] if c in r["rxdop"]]
 
 
 def summary_row(case: dict, doppler: bool, algorithm: str, seed, rows: list[dict]) -> dict:
@@ -126,6 +153,8 @@ def summary_row(case: dict, doppler: bool, algorithm: str, seed, rows: list[dict
         "rejected_rms_doppler": sum(1 for r in rows if r["reason"] == "rejected_rms_doppler"),
         "end_offset_m": _round(max((r["offset"] for r in rows if r["t_s"] == t_end), default=0.0), 1),
         "pos_err_last30s_m": _round(statistics.fmean(last) if last else None, 1),
+        "rxdop_rms_hz": _round(_rmse([f for r in solved for f in r["rxdop"].values()]), 3),
+        "rxdop_corr_err_rms_hz": _round(_rmse(_corr_errors(solved)), 3),
     }
 
 
@@ -240,23 +269,26 @@ def plot_error_vs_offset(path, title, panels, by_bearing: bool = False):
     _save(fig, path)
 
 
-def plot_overview(path, title, means: dict, baseline: dict, cases: list[dict]):
-    """means[(case, doppler, alg)] = mean summary row."""
+def plot_overview(path, title, means: dict, baseline: dict, cases: list[dict], dopplers: list[bool], algorithms):
+    """means[(case, doppler, alg)] = mean summary row; one row of panels per
+    receiver-Doppler setting."""
     moving = [c for c in cases if c["motion"].get("type", "static") != "static"]
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8.5), facecolor=SURFACE)
+    fig, axes = plt.subplots(
+        len(dopplers), 2, figsize=(12, 4.6 * len(dopplers) + 0.8), facecolor=SURFACE, squeeze=False
+    )
     x = list(range(len(moving)))
-    w = 0.38
-    for row, doppler in enumerate((False, True)):
+    w = 0.8 / len(algorithms)
+    for row, doppler in enumerate(dopplers):
         for col, (key, label, log) in enumerate(
             (("pos_rmse_m", "Position RMSE (m, log scale)", True), ("vel_rmse_ms", "Velocity RMSE (m/s)", False))
         ):
             ax = axes[row][col]
             _style(ax)
             ax.grid(axis="x", visible=False)
-            for k, alg in enumerate(ALGORITHMS):
+            for k, alg in enumerate(algorithms):
                 vals = [(means.get((c["id"], doppler, alg)) or {}).get(key) for c in moving]
                 ax.bar(
-                    [i + (k - 0.5) * w for i in x],
+                    [i + (k - (len(algorithms) - 1) / 2) * w for i in x],
                     [v or 0 for v in vals],
                     width=w - 0.04,
                     color=ALG_COLOUR[alg],
@@ -290,8 +322,8 @@ def plot_overview(path, title, means: dict, baseline: dict, cases: list[dict]):
         handles,
         labels,
         loc="upper left",
-        bbox_to_anchor=(0.02, 0.955),
-        ncol=3,
+        bbox_to_anchor=(0.02, 1 - 0.45 / fig.get_figheight()),
+        ncol=2 if len(algorithms) > 2 else 3,
         fontsize=9,
         frameon=False,
         labelcolor=INK_2,
@@ -304,7 +336,84 @@ def plot_overview(path, title, means: dict, baseline: dict, cases: list[dict]):
         color=INK_2,
         fontsize=8.5,
     )
-    fig.tight_layout(rect=(0, 0.02, 1, 0.92))
+    fig.tight_layout(rect=(0, 0.02, 1, 1 - 1.0 / fig.get_figheight()))
+    _save(fig, path)
+
+
+def plot_velocity_vs_speed(path, title, rows_by_alg: dict[str, list[dict]], algorithms, baseline_vel):
+    """Velocity RMSE in 1 m/s bins of the receiver's speed at the time."""
+    fig, ax = plt.subplots(figsize=(9, 5), facecolor=SURFACE)
+    _style(ax)
+    edges = list(range(0, 17))
+    for alg in algorithms:
+        rows = [r for r in rows_by_alg[alg] if r["solved"] and r["vel"] is not None]
+        xs, ys = [], []
+        for lo, hi in zip(edges, edges[1:]):
+            v = [r["vel"] for r in rows if lo <= r["speed"] < hi]
+            if len(v) >= 20:
+                xs.append((lo + hi) / 2)
+                ys.append(_rmse(v))
+        ax.plot(xs, ys, "-o", color=ALG_COLOUR[alg], linewidth=2, markersize=5, label=ALG_LABEL[alg])
+    if baseline_vel:
+        ax.axhline(baseline_vel, color=BASELINE_COLOUR, linestyle=(0, (5, 3)), linewidth=1.6,
+                   label=f"static baseline ({baseline_vel:.2f})")  # fmt: skip
+    ax.set_xlabel("Receiver speed at the time of the solve (m/s)", color=INK, fontsize=10)
+    ax.set_ylabel("Horizontal velocity RMSE (m/s)", color=INK, fontsize=10)
+    ax.set_xlim(0, 16)
+    ax.set_ylim(bottom=0)
+    ax.legend(loc="upper left", fontsize=8.5, frameon=False, labelcolor=INK_2)
+    fig.suptitle(title, color=INK, fontsize=12, x=0.02, ha="left")
+    fig.text(
+        0.02, 0.005, "Every moving case and seed pooled; 1 m/s bins with at least 20 solves.", color=INK_2, fontsize=8.5
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 0.94))
+    _save(fig, path)
+
+
+def plot_doppler_correction(path, title, by_case: dict[str, list[dict]]):
+    """by_case[case] = GD rows across seeds.  Left: how big each channel's
+    receiver Doppler is; right: how far GD's correction was from it."""
+    cases = list(by_case)
+    channels = sorted({c for rows in by_case.values() for r in rows for c in r["rxdop"]})
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.2), facecolor=SURFACE)
+    x = list(range(len(cases)))
+    w = 0.8 / max(len(channels), 1)
+    for ax, (key, label, log) in zip(
+        axes,
+        (
+            ("size", "RMS receiver Doppler in the measurement (Hz)", False),
+            ("err", "RMS error of GD's correction (Hz, log scale)", True),
+        ),
+    ):
+        _style(ax)
+        ax.grid(axis="x", visible=False)
+        for k, ch in enumerate(channels):
+            vals = []
+            for c in cases:
+                rows = [r for r in by_case[c] if r["solved"]]
+                if key == "size":
+                    vals.append(_rmse([r["rxdop"][ch] for r in rows if ch in r["rxdop"]]) or 0)
+                else:
+                    vals.append(_rmse([r["rxcorr"][ch] - r["rxdop"][ch] for r in rows if ch in r["rxcorr"]]) or 0)
+            ax.bar([i + (k - (len(channels) - 1) / 2) * w for i in x], vals, width=w - 0.03,
+                   color=CHANNEL_COLOUR[k % 3], label=ch.upper())  # fmt: skip
+        if log:
+            ax.set_yscale("log")
+            ax.axhline(2.0, color=INK, linestyle=(0, (5, 3)), linewidth=1.2, label="Doppler measurement noise (2 Hz)")
+        ax.set_xticks(x)
+        ax.set_xticklabels(cases, rotation=35, ha="right", fontsize=8.5)
+        ax.set_ylabel(label, color=INK, fontsize=9.5)
+        ax.legend(loc="upper left", fontsize=8.5, frameon=False, labelcolor=INK_2)
+    fig.suptitle(title, color=INK, fontsize=12, x=0.02, ha="left")
+    fig.text(
+        0.02,
+        0.005,
+        "Left: (fc/c)(u_RP + u_TR) . v_R at the true aircraft position.  Right: GD's correction, computed at G's "
+        "solve, minus that.  Every solve, all seeds.",
+        color=INK_2,
+        fontsize=8.5,
+    )
+    fig.tight_layout(rect=(0, 0.03, 1, 0.94))
     _save(fig, path)
 
 
@@ -365,8 +474,10 @@ def build(out: str, exp: dict) -> list[dict]:
                 summary += rows + [m]
 
     static = next(c for c in exp["cases"] if c["motion"].get("type", "static") == "static")
-    baseline_rows = data[(static["id"], False, "stationary")]
-    baseline = means[(static["id"], False, "stationary")]
+    static_doppler = dopplers_for(exp, static)[0]
+    baseline_rows = data[(static["id"], static_doppler, "stationary")]
+    baseline = means[(static["id"], static_doppler, "stationary")]
+    dopplers = list(exp.get("rx_doppler", [False]))
 
     for case in exp["cases"]:
         if case is static:
@@ -398,17 +509,39 @@ def build(out: str, exp: dict) -> list[dict]:
 
     plot_overview(
         os.path.join(out, "overview.png"),
-        f"{exp['name']}: S vs G for every receiver motion",
+        f"{exp['name']}: {' vs '.join(ALG_SHORT[a] for a in algorithms)} for every receiver motion",
         means,
         baseline,
         exp["cases"],
+        dopplers,
+        algorithms,
     )
+    if "geometric_doppler" in algorithms and True in dopplers:
+        moving = [c for c in exp["cases"] if c is not static]
+        pooled = {
+            a: [r for c in moving for rows in data[(c["id"], True, a)].values() for r in rows] for a in algorithms
+        }
+        plot_velocity_vs_speed(
+            os.path.join(out, "velocity_vs_speed.png"),
+            f"{exp['name']}: velocity error against receiver speed (receiver Doppler on)",
+            pooled,
+            algorithms,
+            baseline.get("vel_rmse_ms"),
+        )
+        plot_doppler_correction(
+            os.path.join(out, "doppler_correction.png"),
+            f"{exp['name']}: receiver Doppler per channel, and GD's correction error",
+            {
+                c["id"]: [r for rows in data[(c["id"], True, "geometric_doppler")].values() for r in rows]
+                for c in moving
+            },
+        )
     plot_receiver_paths(os.path.join(out, "receiver_paths.png"), exp["cases"], exp["duration_s"])
-    first = seed_dir(out, static["id"], False, seeds[0])
+    first = seed_dir(out, static["id"], static_doppler, seeds[0])
     nodes_path = os.path.join(first, "nodes.json")
     with open(nodes_path, encoding="utf-8") as f:
         nodes = json.load(f)
-    paths = [(r, _truth_path(seed_dir(out, static["id"], False, r["seed"]))) for r in exp["runs"]]
+    paths = [(r, _truth_path(seed_dir(out, static["id"], static_doppler, r["seed"]))) for r in exp["runs"]]
     plot_map(os.path.join(out, "paths_map.png"), f"{exp['name']}: flight paths", nodes, paths)
 
     with open(os.path.join(out, "summary.csv"), "w", newline="", encoding="utf-8") as f:
