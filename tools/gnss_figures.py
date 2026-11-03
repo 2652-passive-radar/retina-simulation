@@ -5,14 +5,18 @@ Writes to ``runs/gnss-model/<date_time>/`` (or ``--out``):
 
 ``gnss_autocorrelation.png``   autocorrelation of the correlated part, theory
                                exp(-|lag|/T) with the measured one on top (as in
-                               the paper), and of the total error
-``gnss_error_time_series.png`` one 300 s run: total error per axis, its
-                               correlated and white parts
-``gnss_time_constant.png``     the correlated part for several T, same size
+                               the paper), and of the total error; thin lines are
+                               what single 300 s runs measure
+``gnss_error_time_series.png`` five 300 s runs per axis: the correlated part
+                               (thick) and the total error (thin), over the band
+                               90% of runs stay in
+``gnss_time_constant.png``     the correlated part for several T, five runs each,
+                               same size
 ``gnss_rate_check.png``        measured size of the correlated part against T,
                                at 1 Hz and 10 Hz: it stays at sigma_corr
-``gnss_horizontal_error.png``  the horizontal error of one run, east vs north,
-                               coloured by time: the wander
+``gnss_horizontal_error.png``  the horizontal error of five runs, east vs north,
+                               over every fix of many runs, with the circles 39%
+                               and 95% of fixes fall in
 ``stats.csv``                  set and measured values
 
 Usage::
@@ -40,9 +44,26 @@ sys.path.insert(0, _REPO)
 from retina_simulation import gnss  # noqa: E402
 from retina_simulation.motion import Motion  # noqa: E402
 
-SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
+SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4")
 KEY = "gnss-figures"
 RUN_S = 300.0
+N_SHOWN = 5
+N_BAND = 300
+BAND = "#d9d8d3"
+
+
+def _runs(model: gnss.GnssModel, n: int) -> list[list[dict]]:
+    """``n`` independent 300 s runs of a static receiver (realisations 0..n-1)."""
+    return [gnss.fixes(model, Motion(), RUN_S, KEY, k) for k in range(n)]
+
+
+def _band(runs: list[list[dict]], field) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """5th and 95th percentile across runs at each fix index (runs share no stamps,
+    so the index stands in for time; the phase is under one update interval)."""
+    n = min(len(r) for r in runs)
+    vals = np.array([[field(f) for f in r[:n]] for r in runs])
+    t = np.mean([[f["t_s"] for f in r[:n]] for r in runs], axis=0)
+    return t, np.percentile(vals, 5, axis=0), np.percentile(vals, 95, axis=0)
 
 
 def _acf(x: np.ndarray, max_lag: int) -> np.ndarray:
@@ -70,14 +91,24 @@ def plot_autocorrelation(path: str, model: gnss.GnssModel) -> dict:
     share = model.sigma_corr_m**2 / (model.sigma_corr_m**2 + model.sigma_white_m**2)
     theory_nu = np.exp(-np.abs(lags) / tau)
     theory_tot = np.where(lags == 0, 1.0, share * theory_nu)
+    short = []
+    for k in range(20):
+        e = _long_errors(model, RUN_S, k + 1)["east"]
+        n = min(max_lag, len(e["corr"]) - 1)
+        short.append((_acf(e["corr"], n), _acf(e["corr"] + e["white"], n)))
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5), facecolor=SURFACE)
     panels = (
-        (axes[0], "Correlated part only (Gauss-Markov)", theory_nu, nu, "theory  exp(-|lag| / T)"),
-        (axes[1], "Total error (correlated + white)", theory_tot, tot, "theory  0.90 exp(-|lag| / T), 1 at 0"),
+        (axes[0], "Correlated part only (Gauss-Markov)", theory_nu, nu, "theory  exp(-|lag| / T)", 0),
+        (axes[1], "Total error (correlated + white)", theory_tot, tot, "theory  0.90 exp(-|lag| / T), 1 at 0", 1),
     )
-    for ax, title, theory, measured, tlabel in panels:
+    for ax, title, theory, measured, tlabel, which in panels:
         _style(ax)
+        for j, pair in enumerate(short):
+            one = pair[which]
+            x = np.arange(-len(one) + 1, len(one)) / rate
+            ax.plot(x, np.concatenate([one[:0:-1], one]), color=BAND, linewidth=0.9, zorder=1,
+                    label=f"single {RUN_S:g} s runs (20)" if j == 0 else None)  # fmt: skip
         sym = np.concatenate([measured[:0:-1], measured])
         ax.plot(lags, theory, color=SERIES[0], linewidth=2.2, label=tlabel.replace("0.90", f"{share:.2f}"))
         step = max(1, len(lags) // 60)
@@ -87,9 +118,9 @@ def plot_autocorrelation(path: str, model: gnss.GnssModel) -> dict:
             ax.axvline(x, color=MUTED, linewidth=1, linestyle=(0, (4, 3)))
         ax.set_xticks([-3 * tau, -2 * tau, -tau, 0, tau, 2 * tau, 3 * tau])
         ax.set_xticklabels(["-3T", "-2T", "-T", "0", "T", "2T", "3T"])
-        ax.set_yticks([0, 1 / math.e, share, 1])
-        ax.set_yticklabels(["0", "1/e", f"{share:.2f}", "1"])
-        ax.set_ylim(-0.05, 1.05)
+        ax.set_yticks([-0.5, 0, 1 / math.e, share, 1])
+        ax.set_yticklabels(["-0.5", "0", "1/e", f"{share:.2f}", "1"])
+        ax.set_ylim(-0.6, 1.05)
         ax.set_xlabel(f"Lag (T = {tau:g} s)", color=INK, fontsize=10)
         ax.set_ylabel("Autocorrelation", color=INK, fontsize=10)
         ax.set_title(title, color=INK, fontsize=10.5, loc="left")
@@ -100,70 +131,100 @@ def plot_autocorrelation(path: str, model: gnss.GnssModel) -> dict:
         0.005,
         f"sigma_corr {model.sigma_corr_m:g} m, sigma_white {model.sigma_white_m:g} m, {rate:g} Hz; measured over "
         f"{dur:,.0f} s, mean of the 3 axes. The white part adds a spike at lag 0 and scales the rest by "
-        f"sigma_corr^2 / (sigma_corr^2 + sigma_white^2) = {share:.2f}.",
+        f"sigma_corr^2 / (sigma_corr^2 + sigma_white^2) = {share:.2f}.\nA single {RUN_S:g} s run spans only "
+        f"{RUN_S / tau:g} T: what it measures scatters widely and sits below the theory (removing its own mean "
+        "takes out part of the slow wander), dipping negative at long lags.",
         color=INK_2,
         fontsize=8.5,
     )
-    fig.tight_layout(rect=(0, 0.04, 1, 0.94))
+    fig.tight_layout(rect=(0, 0.07, 1, 0.94))
     _save(fig, path)
     k = int(round(tau * rate))
     return {"acf_at_T_measured": round(float(nu[k]), 3), "acf_at_T_theory": round(math.exp(-1), 3)}
 
 
 def plot_time_series(path: str, model: gnss.GnssModel) -> None:
-    rows = gnss.fixes(model, Motion(), RUN_S, KEY)
-    t = [r["t_s"] for r in rows]
-    fig, axes = plt.subplots(3, 1, figsize=(11, 8), sharex=True, facecolor=SURFACE)
+    runs = _runs(model, N_BAND)
+    fig, axes = plt.subplots(3, 1, figsize=(11, 8.5), sharex=True, facecolor=SURFACE)
     for ax, axis in zip(axes, gnss.AXES):
         _style(ax)
-        total = [r[f"{axis}_m"] - r[f"true_{axis}_m"] for r in rows]
-        ax.plot(t, total, color=SERIES[0], linewidth=1.2, label="total error")
-        ax.plot(t, [r[f"corr_{axis}_m"] for r in rows], color=SERIES[1], linewidth=2, label="correlated part")
-        ax.scatter(t, [r[f"white_{axis}_m"] for r in rows], s=5, color=MUTED, label="white part", zorder=2)
-        ax.axhline(0, color=GRID, linewidth=1)
+        t, lo, hi = _band(runs, lambda f, a=axis: f[f"{a}_m"] - f[f"true_{a}_m"])
+        ax.fill_between(t, lo, hi, color=BAND, alpha=0.7, linewidth=0, label=f"90% of {N_BAND} runs")
+        for k, rows in enumerate(runs[:N_SHOWN]):
+            tt = [r["t_s"] for r in rows]
+            ax.plot(
+                tt, [r[f"{axis}_m"] - r[f"true_{axis}_m"] for r in rows], color=SERIES[k], linewidth=0.7, alpha=0.45
+            )
+            ax.plot(tt, [r[f"corr_{axis}_m"] for r in rows], color=SERIES[k], linewidth=2, label=f"run {k + 1}")
+        ax.axhline(0, color=INK_2, linewidth=0.8)
         ax.set_ylabel(f"{axis} error (m)", color=INK, fontsize=9.5)
-    axes[0].legend(loc="upper right", fontsize=8.5, frameon=False, labelcolor=INK_2, ncol=3)
+    axes[0].legend(loc="upper left", fontsize=8, frameon=False, labelcolor=INK_2, ncol=6)
     axes[-1].set_xlabel("Time (s)", color=INK, fontsize=10)
     axes[-1].set_xlim(0, RUN_S)
     fig.suptitle(
-        f"GNSS position error over one {RUN_S:g} s run (sigma_corr {model.sigma_corr_m:g} m, T {model.tau_s:g} s, "
-        f"sigma_white {model.sigma_white_m:g} m, {model.rate_hz:g} Hz)",
+        f"GNSS position error, {N_SHOWN} independent {RUN_S:g} s runs (sigma_corr {model.sigma_corr_m:g} m, "
+        f"T {model.tau_s:g} s, sigma_white {model.sigma_white_m:g} m, {model.rate_hz:g} Hz)",
         color=INK,
         fontsize=11.5,
         x=0.02,
         ha="left",
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.text(
+        0.02,
+        0.005,
+        "Thick: each run's correlated part. Thin, same colour: its total error (correlated + white). "
+        f"Grey band: where 90% of {N_BAND} runs are at each moment.",
+        color=INK_2,
+        fontsize=8.5,
+    )
+    fig.tight_layout(rect=(0, 0.02, 1, 0.95))
     _save(fig, path)
 
 
 def plot_time_constants(path: str, model: gnss.GnssModel, taus=(1.0, 10.0, 60.0, 300.0)) -> None:
-    fig, axes = plt.subplots(len(taus), 1, figsize=(11, 2.1 * len(taus) + 0.8), sharex=True, sharey=True)
+    fig, axes = plt.subplots(len(taus), 1, figsize=(11, 2.2 * len(taus) + 0.9), sharex=True, sharey=True)
     fig.set_facecolor(SURFACE)
     lim = 3.5 * model.sigma_corr_m
-    for ax, tau, colour in zip(axes, taus, SERIES):
+    for ax, tau in zip(axes, taus):
         _style(ax)
         m = gnss.GnssModel(sigma_corr_m=model.sigma_corr_m, tau_s=tau, rate_hz=model.rate_hz)
-        times = gnss.stamps(m, RUN_S, KEY)
-        nu = gnss.errors(m, times, KEY)["east"]["corr"]
-        ax.plot(times, nu, color=colour, linewidth=1.6)
-        ax.axhline(0, color=GRID, linewidth=1)
+        series = []
+        for k in range(N_BAND):
+            times = gnss.stamps(m, RUN_S, KEY, k)
+            series.append((times, gnss.errors(m, times, KEY, k)["east"]["corr"]))
+        n = min(len(v) for _, v in series)
+        vals = np.array([v[:n] for _, v in series])
+        t = np.mean([tt[:n] for tt, _ in series], axis=0)
+        ax.fill_between(
+            t, np.percentile(vals, 5, axis=0), np.percentile(vals, 95, axis=0), color=BAND, alpha=0.7, linewidth=0
+        )
+        for k, (times, nu) in enumerate(series[:N_SHOWN]):
+            ax.plot(times, nu, color=SERIES[k], linewidth=1.4)
+        ax.axhline(0, color=INK_2, linewidth=0.8)
         for s in (-model.sigma_corr_m, model.sigma_corr_m):
-            ax.axhline(s, color=MUTED, linewidth=0.9, linestyle=(0, (4, 3)))
+            ax.axhline(s, color=INK, linewidth=0.9, linestyle=(0, (4, 3)))
         ax.set_ylim(-lim, lim)
         ax.set_ylabel("east (m)", color=INK, fontsize=9)
         ax.set_title(f"T = {tau:g} s", color=INK, fontsize=10, loc="left")
     axes[-1].set_xlabel("Time (s)", color=INK, fontsize=10)
     axes[-1].set_xlim(0, RUN_S)
     fig.suptitle(
-        f"Correlated part for different time constants, same size (sigma_corr {model.sigma_corr_m:g} m, dashed) "
-        "and the same random draws",
+        f"Correlated part for different time constants: {N_SHOWN} runs each, same size "
+        f"(sigma_corr {model.sigma_corr_m:g} m, dashed)",
         color=INK,
         fontsize=11.5,
         x=0.02,
         ha="left",
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.text(
+        0.02,
+        0.005,
+        f"Run k uses the same random draws in every panel. Grey band: where 90% of {N_BAND} runs are at each moment; "
+        "it is the same width for every T.",
+        color=INK_2,
+        fontsize=8.5,
+    )
+    fig.tight_layout(rect=(0, 0.02, 1, 0.95))
     _save(fig, path)
 
 
@@ -217,35 +278,51 @@ def plot_rate_check(path: str, model: gnss.GnssModel, taus=(1.0, 10.0, 60.0, 300
 
 
 def plot_horizontal(path: str, model: gnss.GnssModel) -> None:
-    rows = gnss.fixes(model, Motion(), RUN_S, KEY)
-    e = np.array([r["east_m"] - r["true_east_m"] for r in rows])
-    n = np.array([r["north_m"] - r["true_north_m"] for r in rows])
-    t = np.array([r["t_s"] for r in rows])
-    fig, ax = plt.subplots(figsize=(7.5, 7), facecolor=SURFACE)
+    runs = _runs(model, N_BAND)
+    fig, ax = plt.subplots(figsize=(8, 7.6), facecolor=SURFACE)
     _style(ax)
-    ax.plot(e, n, color=GRID, linewidth=1, zorder=1)
-    sc = ax.scatter(e, n, c=t, cmap="viridis", s=14, zorder=2)
-    total = math.sqrt(model.sigma_corr_m**2 + model.sigma_white_m**2)
-    ring = np.linspace(0, 2 * math.pi, 200)
-    ax.plot(
-        total * np.cos(ring),
-        total * np.sin(ring),
-        color=INK,
-        linewidth=1.1,
-        linestyle=(0, (5, 3)),
-        label=f"1 sigma ({total:.2f} m)",
+    allp = np.array([[f["east_m"] - f["true_east_m"], f["north_m"] - f["true_north_m"]] for r in runs for f in r])
+    ax.scatter(
+        allp[:, 0], allp[:, 1], s=2, color=BAND, alpha=0.5, linewidths=0, zorder=1, label=f"every fix, {N_BAND} runs"
     )
-    ax.scatter([0], [0], marker="+", s=120, color=INK, zorder=3, label="true position")
+    for k, rows in enumerate(runs[:N_SHOWN]):
+        e = [r["east_m"] - r["true_east_m"] for r in rows]
+        n = [r["north_m"] - r["true_north_m"] for r in rows]
+        ce, cn = [r["corr_east_m"] for r in rows], [r["corr_north_m"] for r in rows]
+        ax.scatter(e, n, s=5, color=SERIES[k], alpha=0.35, linewidths=0, zorder=2)
+        ax.plot(ce, cn, color=SERIES[k], linewidth=2, zorder=3, label=f"run {k + 1}")
+        ax.scatter([ce[0]], [cn[0]], s=45, color=SERIES[k], edgecolors=SURFACE, linewidths=1.2, zorder=4)
+        ax.scatter([ce[-1]], [cn[-1]], s=65, marker="s", color=SERIES[k], edgecolors=SURFACE, linewidths=1.2, zorder=4)
+    sig = math.sqrt(model.sigma_corr_m**2 + model.sigma_white_m**2)
+    ring = np.linspace(0, 2 * math.pi, 200)
+    for r, style, label in (
+        (sig, (0, (5, 3)), f"1 sigma per axis, {sig:.2f} m: holds 39% in 2D"),
+        (sig * math.sqrt(-2 * math.log(0.05)), "-", f"{sig * math.sqrt(-2 * math.log(0.05)):.2f} m: holds 95%"),
+    ):
+        ax.plot(r * np.cos(ring), r * np.sin(ring), color=INK, linewidth=1.1, linestyle=style, zorder=3, label=label)
+    ax.scatter([0], [0], marker="+", s=140, color=INK, zorder=5)
     ax.set_aspect("equal", adjustable="datalim")
     ax.set_xlabel("East error (m)", color=INK, fontsize=10)
     ax.set_ylabel("North error (m)", color=INK, fontsize=10)
-    ax.legend(loc="upper right", fontsize=8.5, frameon=False, labelcolor=INK_2)
-    cb = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.03)
-    cb.set_label("time (s)", color=INK_2, fontsize=9)
-    fig.suptitle(
-        f"Horizontal GNSS error over one {RUN_S:g} s run: it wanders", color=INK, fontsize=12, x=0.02, ha="left"
+    ax.legend(
+        loc="upper left", fontsize=8, frameon=True, facecolor=SURFACE, edgecolor=GRID, labelcolor=INK_2, markerscale=3
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.suptitle(
+        f"Horizontal GNSS error: {N_SHOWN} runs of {RUN_S:g} s (dot: start, square: end)",
+        color=INK,
+        fontsize=12,
+        x=0.02,
+        ha="left",
+    )
+    fig.text(
+        0.02,
+        0.005,
+        "Line: each run's correlated part (the wander); dots, same colour: its fixes.\nEach run covers a different "
+        "part of the cloud; over many runs the fixes fill it evenly around the true position (+).",
+        color=INK_2,
+        fontsize=8.5,
+    )
+    fig.tight_layout(rect=(0, 0.04, 1, 0.95))
     _save(fig, path)
 
 
