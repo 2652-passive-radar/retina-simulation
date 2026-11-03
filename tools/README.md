@@ -261,3 +261,25 @@ Each solve file also carries, per channel, `rxdop_true_hz_<node>` (the receiver
 Doppler in that measurement) and, for GD, `rxdop_corr_hz_<node>` (what GD
 subtracted). One recording by hand:
 `tools\offline_solve.py <seed folder> --receiver geometric_doppler`.
+
+## Step 3a: GNSS error model
+
+`retina_simulation/gnss.py` makes the receiver's GNSS position fixes (position
+only, no velocity): per axis, the true position plus a first-order
+Gauss-Markov (AR(1)) error and white noise, at a set update rate, with an
+uncorrected time offset and a known latency. Its parameters are
+`sigma_white_m` (0.5), `sigma_corr_m` (1.5, the correlated part's steady-state
+size), `tau_s` (60), `rate_hz` (1), `time_offset_s` (0) and `latency_s` (0).
+
+Figures that check the model behaves as specified (no server, no recordings,
+about 10 s):
+
+```
+cd "$root\libs\retina-simulation"
+..\..\backend\.venv\Scripts\python.exe tools\gnss_figures.py --out "C:\radar-runs\gnss-model\$(Get-Date -Format yyyy-MM-dd_HHmmss)"
+```
+
+`--sigma-white`, `--sigma-corr`, `--tau` and `--rate` change the model. Output:
+`gnss_autocorrelation.png` (theory against simulated, as in the paper),
+`gnss_error_time_series.png`, `gnss_time_constant.png`, `gnss_rate_check.png`,
+`gnss_horizontal_error.png` and `stats.csv` (set against measured values).

@@ -491,3 +491,64 @@ vehicle and 28% north vehicle)
   noise, rate, latency, dropouts, lever arm), and a Kalman filter that
   estimates the receiver's position and velocity from GNSS, compared against
   raw GNSS and against the known trajectory of this step.
+
+## Step 3a: GNSS error model (2026-11-03)
+
+### Decided with you
+- The receiver's GNSS gives position only; the Kalman filter (3b) will
+  estimate velocity from it.
+- Error per axis = time-correlated part + white noise:
+  `p_meas(t_i) = p_true(t_i - time_offset) + nu_i + eps_i`, with `nu` a
+  first-order Gauss-Markov (AR(1)) process as in the paper:
+  `nu_i = a_i nu_{i-1} + w_i`, `a_i = exp(-(t_i - t_{i-1}) / T)`.
+- Two corrections to the first write-up:
+  - each axis draws its own `w` and `eps` (independent axes);
+  - the size is set by the steady-state `sigma_corr`, and
+    `w ~ N(0, sigma_corr^2 (1 - a_i^2))` is derived from it. Otherwise
+    changing T or the update rate would also change how big the error is.
+- Same parameters on all three axes (no vertical scale), no lever arm.
+- Timing: an unknown `time_offset_s` (the fix describes an earlier moment and
+  nothing corrects it) and a known `latency_s` (the fix arrives late; a filter
+  can predict past it), kept separate.
+- Defaults, placeholders for the Monte Carlo to vary: sigma_white 0.5 m,
+  sigma_corr 1.5 m, T 60 s, 1 Hz, no offset, no latency.
+
+### Built
+- `retina_simulation/gnss.py`: `GnssModel`; `stamps` (fixes at the update rate
+  from a random phase, so the GNSS clock is not aligned with the radar's
+  ticks); `errors` (both error parts per axis; `nu` starts stationary,
+  `nu_0 ~ N(0, sigma_corr^2)`); `fixes` (measured position, true position at
+  the stamp, and both error parts, in metres east/north/up of the registered
+  position); `write_fixes` (`gnss.ndjson`). Pure Python; every draw from its
+  own seeded stream keyed by (key, realisation, axis), independent of the
+  radar noise, so the step 2 recordings are reused unchanged.
+- `tools/gnss_figures.py`: the figures below, to a timestamped folder.
+
+### Verified
+- `tests/test_gnss.py` (13): the correlated part's size is sigma_corr at
+  T 5 and 20 s and at 1 and 10 Hz; autocorrelation follows exp(-lag/T);
+  T = 0 is white noise; it starts stationary; white noise has its sigma;
+  axes are uncorrelated; same key gives the same fixes and another
+  realisation does not; stamps follow the rate from a random phase; a time
+  offset reports the position `offset x velocity` earlier while latency only
+  delays arrival; each fix = truth + both parts.
+- Figures (defaults): measured autocorrelation at lag T 0.351 against
+  1/e = 0.368; measured sigma_corr 1.47-1.56 m against 1.5 m for T 1-300 s at
+  1 and 10 Hz; white sigma 0.5 m.
+
+### What the figures show
+- `gnss_autocorrelation.png`: the paper's figure, theory against simulation.
+  The total error's autocorrelation is the same curve scaled by
+  sigma_corr^2 / (sigma_corr^2 + sigma_white^2) = 0.90, plus a spike at lag 0
+  from the white part.
+- `gnss_error_time_series.png`: the error is a slow wander of a few metres
+  with small white noise on top, as real GNSS is.
+- `gnss_time_constant.png`: T = 1 s looks like white noise, T = 300 s like a
+  drifting offset; all have the same size.
+- `gnss_horizontal_error.png`: over 300 s the horizontal error drifts ~5 m
+  from one side of the true position to the other; averaging over a few
+  seconds would not remove it.
+
+### Next (not started)
+- 3b: Kalman filter estimating receiver position and velocity from these
+  fixes, with `nu` in its model.
