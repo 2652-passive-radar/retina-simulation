@@ -1221,6 +1221,14 @@ def _parse_metro_areas(metros_str: str) -> list[dict]:
     return result
 
 
+def _resolve_fc_override(cli_value: float | None) -> float | None:
+    """--fc-hz wins; SIM_FC_HZ is the fallback so a container can set it without editing its command."""
+    if cli_value is not None:
+        return cli_value
+    env = os.environ.get("SIM_FC_HZ", "").strip()
+    return float(env) if env else None
+
+
 async def main_async(args):
     """Main async entry point."""
     # Load or generate fleet config
@@ -1233,6 +1241,7 @@ async def main_async(args):
     # stamp, or the in-process generation fallback below, never triggers a
     # restart loop.
     scene = None
+    fc_hz_override = _resolve_fc_override(getattr(args, "fc_hz", None))
     if args.config and os.path.exists(args.config):
         with open(args.config) as f:
             data = json.load(f)
@@ -1242,6 +1251,11 @@ async def main_async(args):
             all_nodes = data.get("nodes", [])
         cells = data.get("cells", [])
         scene = data.get("fleet", {}).get("scene")
+        # A pre-generated file carries its own tower frequencies; the override
+        # has to be applied to it too or it would only affect auto-generation.
+        if fc_hz_override is not None:
+            for n in all_nodes:
+                n["fc_hz"] = fc_hz_override
     else:
         log.info("No config file, generating %d nodes...", args.nodes)
         regions = [r.strip() for r in args.regions.split(",")]
@@ -1252,6 +1266,7 @@ async def main_async(args):
             n_cluster=args.n_cluster,
             n_clusters=args.n_clusters,
             metro=getattr(args, "metro", None),
+            fc_hz_override=fc_hz_override,
         )
         cells = coverage_cells(
             n_cluster=args.n_cluster,
@@ -1561,6 +1576,13 @@ def main():
         type=float,
         default=0.6,
         help="Fraction of spawns routed through metro coverage rings (rest en-route)",
+    )
+    parser.add_argument(
+        "--fc-hz",
+        type=float,
+        default=None,
+        help="Force every node onto this carrier (Hz), e.g. 500000000 for the "
+        "Vancouver DTV setup. Falls back to $SIM_FC_HZ; default keeps each tower's frequency.",
     )
     args = parser.parse_args()
 

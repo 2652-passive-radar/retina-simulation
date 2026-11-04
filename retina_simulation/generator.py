@@ -1267,6 +1267,19 @@ def coverage_cells(
     return cells
 
 
+def _apply_carrier_override(nodes: list[dict], fc_hz_override: float | None) -> list[dict]:
+    """Force every node onto one carrier, applied last so no layout path can miss it.
+
+    The tower tables hold real US frequencies (VHF/low UHF), but the fleet's
+    real nodes listen to ~500 MHz DTV; a run that wants to mimic that setup
+    needs the carrier replaced everywhere, not just on the base metro nodes.
+    """
+    if fc_hz_override is not None:
+        for n in nodes:
+            n["fc_hz"] = fc_hz_override
+    return nodes
+
+
 def generate_fleet(
     n_nodes: int = 200,
     regions: list[str] | None = None,
@@ -1286,6 +1299,7 @@ def generate_fleet(
     dual_min_eirp_dbm: float = 40.0,
     dual_aim: str = "core",
     dual_fraction: float = 0.0,
+    fc_hz_override: float | None = None,
 ) -> list[dict]:
     """Generate a fleet of synthetic node configurations.
 
@@ -1473,17 +1487,20 @@ def generate_fleet(
             _vhf = [t for t in _dual_towers if t[3] < 300e6]
             if len(_vhf) >= 2:
                 _dual_towers = _vhf
-        return _generate_dual_sites(
-            n_sites=n_sites,
-            core_lat=metro_area["lat"],
-            core_lon=metro_area["lon"],
-            towers=_dual_towers,
-            metro_radius_km=metro_area["radius_nm"] * _NM_TO_KM,
-            prefix=f"synth-{metro.strip().upper()}-DUAL" if metro else "synth-DUAL",
-            beam_width_deg=ring_beam_width_deg,
-            max_bistatic_range_km=ring_max_range_km,
-            min_eirp_dbm=dual_min_eirp_dbm,
-            aim=dual_aim,
+        return _apply_carrier_override(
+            _generate_dual_sites(
+                n_sites=n_sites,
+                core_lat=metro_area["lat"],
+                core_lon=metro_area["lon"],
+                towers=_dual_towers,
+                metro_radius_km=metro_area["radius_nm"] * _NM_TO_KM,
+                prefix=f"synth-{metro.strip().upper()}-DUAL" if metro else "synth-DUAL",
+                beam_width_deg=ring_beam_width_deg,
+                max_bistatic_range_km=ring_max_range_km,
+                min_eirp_dbm=dual_min_eirp_dbm,
+                aim=dual_aim,
+            ),
+            fc_hz_override,
         )
 
     # Track how many times each API tower has been used (per metro) for
@@ -1522,7 +1539,9 @@ def generate_fleet(
         )
         rx_alt_ft = random.uniform(100, 2000)
 
-        node_fc = fc_hz + random.choice([-500000, 0, 0, 0, 500000])
+        # The jitter draw is skipped under an override: every node is forced onto
+        # one carrier below, so there is nothing for it to perturb.
+        node_fc = fc_hz if fc_hz_override is not None else fc_hz + random.choice([-500000, 0, 0, 0, 500000])
         beam_width = 42.0  # identical 42-degree Yagis fleet-wide
         max_range = random.uniform(35, 55)
 
@@ -1659,7 +1678,7 @@ def generate_fleet(
                     aim=dual_aim,
                 )
             )
-        return nodes + ring_nodes
+        return _apply_carrier_override(nodes + ring_nodes, fc_hz_override)
     if layout == "scatter":
         # Like "dual", this replaces the ring rather than adding to it — the
         # point is a fleet nobody placed, and a designed ring alongside it
@@ -1679,7 +1698,7 @@ def generate_fleet(
                     max_bistatic_range_km=ring_max_range_km,
                 )
             )
-        return nodes + ring_nodes + _dual_fraction_sites(n_dual_sites)
+        return _apply_carrier_override(nodes + ring_nodes + _dual_fraction_sites(n_dual_sites), fc_hz_override)
     for ring_id, spec, size in _active_rings(n_cluster, n_clusters, ring_spec):
         tx_lat, tx_lon, tx_alt_ft, fc_hz, callsign, core_lat, core_lon = spec
         ring_nodes.extend(
@@ -1700,7 +1719,7 @@ def generate_fleet(
     # Appended last: every other node above has already consumed its RNG
     # draws, so dual_fraction=0.0 (n_dual_sites=0) leaves that stream
     # untouched and reproduces today's scene byte-for-byte at the same seed.
-    return nodes + _dual_fraction_sites(n_dual_sites)
+    return _apply_carrier_override(nodes + _dual_fraction_sites(n_dual_sites), fc_hz_override)
 
 
 def fleet_summary(nodes: list[dict]) -> dict:
@@ -1817,6 +1836,13 @@ def main():
         "budget and appended after it. Requires --metro. "
         "Ignored for --layout dual (already all-dual).",
     )
+    parser.add_argument(
+        "--fc-hz",
+        type=float,
+        default=None,
+        help="Force every node onto this carrier (Hz), e.g. 500000000 to mimic the "
+        "Vancouver DTV setup. Default: each tower's real frequency.",
+    )
     args = parser.parse_args()
 
     regions = [r.strip().lower() for r in args.regions.split(",")]
@@ -1831,6 +1857,7 @@ def main():
         dual_min_eirp_dbm=args.dual_min_eirp_dbm,
         dual_aim=args.dual_aim,
         dual_fraction=args.dual_fraction,
+        fc_hz_override=args.fc_hz,
         ring_radius_km=args.ring_radius_km,
         ring_beam_width_deg=args.ring_beam_width_deg,
         ring_max_range_km=args.ring_max_range_km,

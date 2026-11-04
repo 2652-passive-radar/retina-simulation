@@ -243,8 +243,13 @@ class NodeConfig:
     tx_lat: float = 33.75667
     tx_lon: float = -84.331844
     tx_alt_ft: float = 1600.0
-    fc_hz: float = 195_000_000.0
+    # The fleet's real nodes use ~500 MHz DTV illuminators, and the carrier sets
+    # the wavelength every Doppler figure depends on.
+    fc_hz: float = 500_000_000.0
     fs_hz: float = 2_000_000.0
+    # At 500 MHz an airliner's bistatic Doppler can reach several hundred Hz, and
+    # rotor/propeller micro-Doppler extends to roughly +/-700-900 Hz, so a
+    # +/-300 Hz window clips both; real Owl runs +/-1000.
     doppler_min: float = -300.0
     doppler_max: float = 300.0
     min_doppler: float = 15.0
