@@ -9,6 +9,7 @@ description = "Fleet simulator and synthetic node generator for RETINA passive r
 requires-python = ">=3.10"
 dependencies = [
     "retina-custody>=0.1.0",
+    "numpy>=1.24",
     "shapely>=2.0",
 ]
 

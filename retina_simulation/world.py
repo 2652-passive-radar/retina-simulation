@@ -27,6 +27,8 @@ import random
 import time
 from dataclasses import asdict, dataclass, field
 
+from retina_simulation import micro_doppler
+
 C_KM_US = 0.299792458  # speed of light km/μs
 C_KM_S = 299792.458  # speed of light km/s
 R_EARTH = 6371.0  # Earth radius km
@@ -223,6 +225,13 @@ class SimulatedAircraft:
     # for _LIVE_ALT_ADOPT_S — from the feed flipping between several other
     # aircraft's levels, which is never a re-level and must never be adopted.
     live_alt_reject_km: float = 0.0
+    # Rotating-part class (a key of micro_doppler.AIRFRAMES).  "jet" has no rotors
+    # in any node's Doppler window, so it is the no-op default.
+    airframe: str = "jet"
+    # Per-rotor starting blade phase (rad) and a +/-3% rpm jitter, drawn at spawn
+    # for airframes with rotors so two identical aircraft do not share a comb.
+    rotor_phases: list = field(default_factory=list)
+    rpm_scale: float = 1.0
 
     @property
     def adsb_silent(self) -> bool:
@@ -358,6 +367,28 @@ def _bistatic_doppler(target_enu, vel_enu, tx_enu, rx_enu, freq_hz):
     return (freq_hz / C_KM_S) * (v_rad_tx + v_rad_rx)
 
 
+# Kinematics per rotor-bearing airframe: ((speed range, altitude range), km/s and km).
+# Jets keep the original 120-270 m/s, 5-12 km draw inline in _spawn_aircraft.
+_AIRFRAME_KINEMATICS: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {
+    "turboprop": ((0.120, 0.170), (3.0, 7.5)),
+    "piston": ((0.040, 0.070), (0.5, 3.0)),
+    "helicopter": ((0.030, 0.070), (0.2, 1.5)),
+}
+
+
+def _unit_toward(origin, point):
+    """Unit vector from origin toward point, or None when they coincide."""
+    d = [point[i] - origin[i] for i in range(3)]
+    n = _norm(d)
+    return None if n < 1e-9 else [x / n for x in d]
+
+
+def _stable_phases(object_id: str, n: int) -> list[float]:
+    """Rotor phases derived from the object id, for aircraft spawned without drawing any."""
+    digest = hashlib.sha256(object_id.encode()).digest()
+    return [int.from_bytes(digest[2 * i : 2 * i + 2], "big") / 65536.0 * 2.0 * math.pi for i in range(n)]
+
+
 # ── Flight corridor route generation ─────────────────────────────────────────
 
 _NATIONWIDE_MIN_LEG_KM = 400.0
@@ -491,6 +522,14 @@ class SimulationWorld:
         # proximity to count as a conflict.
         self.min_separation_km: float = 5.0
         self.min_vertical_sep_km: float = 0.6  # ~2000 ft
+        # Rotor/propeller micro-Doppler (retina_simulation.micro_doppler).  Off by
+        # default, and with the default all-jet mix no spawn code draws a random
+        # number for it, so seeded runs are unchanged.
+        self.micro_doppler_enabled: bool = False
+        # Integration time of the emulated CPI; sets the comb's line resolution.
+        self.cpi_s: float = 0.5
+        # Fractions of non-drone aircraft by airframe.
+        self.airframe_mix: dict[str, float] = {"jet": 1.0}
 
     def add_node(self, config: NodeConfig):
         """Register a synthetic node in the simulation.
@@ -658,6 +697,20 @@ class SimulationWorld:
                 best = (d, lat, lon, route)
         _, lat, lon, route = best
 
+        airframe = "drone" if object_type == "drone" else "jet"
+        if object_type != "drone" and len(self.airframe_mix) > 1:
+            names = list(self.airframe_mix)
+            airframe = random.choices(names, weights=[self.airframe_mix[n] for n in names])[0]
+        rotor_phases: list[float] = []
+        rpm_scale = 1.0
+        rotors = micro_doppler.AIRFRAMES[airframe]
+        # Drones are exempt: their phases come from the object id (_stable_phases),
+        # because drawing here would shift the random sequence of every seeded run
+        # that spawns drones, micro-Doppler on or off.
+        if rotors and airframe != "drone":
+            rotor_phases = [random.uniform(0.0, 2.0 * math.pi) for _ in rotors]
+            rpm_scale = random.uniform(0.97, 1.03)
+
         if mode == "anomalous" and random.random() < 0.2:
             is_anomalous = True
             object_type = "anomalous"
@@ -669,6 +722,10 @@ class SimulationWorld:
         elif object_type == "drone":
             speed_km_s = random.uniform(0.01, 0.06)  # 10-60 m/s — small UAS
             alt_km = random.uniform(0.05, 0.5)  # 50-500m AGL
+        elif airframe in _AIRFRAME_KINEMATICS:
+            (v_lo, v_hi), (a_lo, a_hi) = _AIRFRAME_KINEMATICS[airframe]
+            speed_km_s = random.uniform(v_lo, v_hi)
+            alt_km = random.uniform(a_lo, a_hi)
         else:
             speed_km_s = random.uniform(0.12, 0.27)  # 120-270 m/s → typical jet
             alt_km = random.uniform(5.0, 12.0)  # 16k-40k ft
@@ -714,6 +771,9 @@ class SimulationWorld:
             has_adsb=has_adsb,
             is_anomalous=is_anomalous,
             object_type=object_type,
+            airframe=airframe,
+            rotor_phases=rotor_phases,
+            rpm_scale=rpm_scale,
             adsb_hex=adsb_hex,
             adsb_callsign=adsb_callsign,
             adsb_outage_start_s=outage_start,
@@ -1096,6 +1156,33 @@ class SimulationWorld:
         angle_diff = abs((bearing - node.beam_azimuth_deg + 180) % 360 - 180)
         return angle_diff <= node.beam_width_deg / 2
 
+    def _micro_doppler_lines(self, ac, node, target_enu, tx_enu, body_doppler, body_snr) -> list[tuple[float, float]]:
+        """Rotor/propeller comb lines (doppler_hz, snr_db) this aircraft shows this node right now."""
+        rotors = micro_doppler.AIRFRAMES.get(ac.airframe, ())
+        if not rotors:
+            return []
+        u_tx = _unit_toward(target_enu, tx_enu)
+        u_rx = _unit_toward(target_enu, (0.0, 0.0, 0.0))
+        if u_tx is None or u_rx is None:
+            return []
+        phases = ac.rotor_phases or _stable_phases(ac.object_id, len(rotors))
+        # Phases advance with the world clock so the comb evolves frame to frame
+        # instead of freezing at its spawn pose.
+        phases = micro_doppler.advance_phases(ac.airframe, phases, self._time, ac.rpm_scale)
+        return micro_doppler.comb_lines(
+            ac.airframe,
+            [u_tx[i] + u_rx[i] for i in range(3)],
+            ac.heading_deg,
+            node.fc_hz,
+            body_doppler,
+            self.cpi_s,
+            node.doppler_min,
+            node.doppler_max,
+            body_snr,
+            phases=phases,
+            rpm_scale=ac.rpm_scale,
+        )
+
     def generate_detections_for_node(self, node_id: str, timestamp_ms: int) -> dict:
         """Generate a detection frame for a specific node.
 
@@ -1142,6 +1229,8 @@ class SimulationWorld:
 
             delay = _bistatic_delay(target_enu, tx_enu, rx_enu)
             doppler = _bistatic_doppler(target_enu, vel_enu, tx_enu, rx_enu, node.fc_hz)
+            true_doppler = doppler
+            body_delay = delay
 
             # SNR depends on distance — compute before noise/miss decisions
             dist = _norm(target_enu)
@@ -1193,6 +1282,17 @@ class SimulationWorld:
             else:
                 adsb_list.append(None)
 
+            if self.micro_doppler_enabled:
+                for line_hz, line_snr in self._micro_doppler_lines(ac, node, target_enu, tx_enu, true_doppler, snr):
+                    # Same miss rule as the body: a weak line is as hard to detect as a weak body.
+                    p_miss_line = max(0.0, min(0.5, 0.05 + 0.35 * (1 - (line_snr - 4) / 18)))
+                    if random.random() < p_miss_line:
+                        continue
+                    delays.append(round(body_delay + random.gauss(0, 0.1 * noise_scale), 2))
+                    dopplers.append(round(line_hz + random.gauss(0, 0.5), 2))
+                    snrs.append(round(line_snr, 2))
+                    adsb_list.append(None)
+
         # Clutter/false alarm detections — Poisson-distributed count (mean ~2)
         # with range-biased delays (more clutter at shorter ranges).
         n_clutter = min(int(random.expovariate(0.5)), 6)
@@ -1234,6 +1334,7 @@ class SimulationWorld:
                 "has_adsb": ac.has_adsb,
                 "is_anomalous": ac.is_anomalous,
                 "object_type": ac.object_type,
+                "airframe": ac.airframe,
                 "adsb_hex": ac.adsb_hex,
                 "adsb_callsign": ac.adsb_callsign,
                 "adsb_silent": ac.adsb_silent,
@@ -1542,6 +1643,7 @@ class SimulationWorld:
                     dopplers.append(round(doppler_noisy, 2))
                     snrs.append(round(snr, 2))
 
+                    body_truth_idx = len(ground_truth)
                     ground_truth.append(
                         {
                             "object_id": ac.object_id,
@@ -1579,6 +1681,22 @@ class SimulationWorld:
                         )
                     else:
                         adsb_list.append(None)
+
+                    if self.micro_doppler_enabled:
+                        for line_hz, line_snr in self._micro_doppler_lines(ac, node, target_enu, tx_enu, doppler, snr):
+                            delays.append(round(delay + random.gauss(0, 0.3), 2))
+                            dopplers.append(round(line_hz + random.gauss(0, 0.5), 2))
+                            snrs.append(round(line_snr, 2))
+                            # One truth record per detection keeps ground_truth index-aligned
+                            # with the detection arrays; the flag lets a consumer drop the lines.
+                            ground_truth.append(
+                                {
+                                    **ground_truth[body_truth_idx],
+                                    "doppler_true": round(line_hz, 4),
+                                    "micro_doppler": True,
+                                }
+                            )
+                            adsb_list.append(None)
 
                 # Add clutter with ground truth label
                 n_clutter = random.randint(0, 3)
