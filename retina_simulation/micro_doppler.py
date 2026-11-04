@@ -56,29 +56,35 @@ class Rotor:
     spin: int = 1
 
 
-# Common-variant values, to verify.  Amplitudes are placeholders until calibrated
-# against a real node recording.
+# Common-variant values, to verify.  Amplitudes are an interim calibration, not
+# RCS ratios: each is set so the rotor's strongest line sits about 15-17 dB below
+# the body line at 500 MHz (tail rotor ~21, drone props ~27).  A long blade
+# spreads its energy over dozens of lines, so a physically "small" amplitude left
+# every line 40-50 dB down, undetectable, whereas Berndt et al. (IET RSN 2024)
+# detect propeller modulation at 50-100% of the fuselage's detection range.
+# Replace these with values fitted to a real node recording of a helicopter or
+# turboprop.
 AIRFRAMES: dict[str, tuple[Rotor, ...]] = {
     # Fan modulation is in the kHz, outside any node's Doppler window.
     "jet": (),
     # Dash 8-400-like: two six-blade props.
     "turboprop": (
-        Rotor(6, 2.05, 17.0, "forward", 0.08),
-        Rotor(6, 2.05, 17.0, "forward", 0.08),
+        Rotor(6, 2.05, 17.0, "forward", 4.96),
+        Rotor(6, 2.05, 17.0, "forward", 4.96),
     ),
     # C172-like: two-blade fixed-pitch prop.
-    "piston": (Rotor(2, 0.95, 45.0, "forward", 0.10),),
+    "piston": (Rotor(2, 0.95, 45.0, "forward", 1.92),),
     # R44-like: main rotor plus tail rotor.
     "helicopter": (
-        Rotor(2, 5.0, 6.8, "up", 0.30),
-        Rotor(2, 0.8, 35.0, "right", 0.05),
+        Rotor(2, 5.0, 6.8, "up", 12.89),
+        Rotor(2, 0.8, 35.0, "right", 0.86),
     ),
     # Quadcopter: counter-rotating pairs.
     "drone": (
-        Rotor(2, 0.12, 90.0, "up", 0.03, spin=1),
-        Rotor(2, 0.12, 90.0, "up", 0.03, spin=-1),
-        Rotor(2, 0.12, 90.0, "up", 0.03, spin=1),
-        Rotor(2, 0.12, 90.0, "up", 0.03, spin=-1),
+        Rotor(2, 0.12, 90.0, "up", 0.37, spin=1),
+        Rotor(2, 0.12, 90.0, "up", 0.37, spin=-1),
+        Rotor(2, 0.12, 90.0, "up", 0.37, spin=1),
+        Rotor(2, 0.12, 90.0, "up", 0.37, spin=-1),
     ),
 }
 
