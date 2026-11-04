@@ -636,6 +636,27 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
    GNSS draws through a linear filter on linear motion. A check, not a
    coincidence.
 
+### Figures redrawn (2026-11-04)
+- The first figures (bar chart per case, error-over-time, mean NEES over time)
+  were hard to read. Replaced by one question per figure: `accuracy.png`,
+  `velocity_tracking.png` (true vs estimated velocity, zoomed),
+  `honesty.png` (claimed vs actual error, and % of time the truth is inside
+  the filter's +/-2 sigma), `error_vs_acceleration.png`. NEES/NIS stay in
+  `summary.csv`.
+- What they add:
+  - **The white filter's overconfidence is in position, not velocity.** Its
+    position +/-2 sigma holds the truth only 77-96% of the time (KF 96-98%);
+    its velocity claims are cautious (100% on straight paths) because its large
+    R makes it smooth hard. Treating the drift as white noise makes it believe
+    it has averaged the drift out of the position.
+  - **Velocity error grows steadily with acceleration** (vehicle cases: KF
+    0.45 m/s at rest, ~1.0 at 0.5 m/s^2, ~1.6 at 0.9 m/s^2), and crosses the
+    0.58 m/s GD tolerance at ~0.15 m/s^2, well below sigma_a: the lag is
+    proportional to acceleration, not a threshold effect. Raw differencing
+    barely lags, so above ~0.75 m/s^2 it is no worse than the filter.
+  - Both filters are overconfident in velocity only when oscillating (81-90%
+    inside), the case whose acceleration exceeds sigma_a.
+
 ### Next (not started)
 - 3c: feed the KF pose (and raw GNSS) to G and GD on the step 2 recordings.
 - Worth trying for the manoeuvring cases: sigma_a ~1 m/s^2 for vehicles, a

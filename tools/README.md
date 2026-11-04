@@ -300,7 +300,12 @@ cd "$root\libs\retina-simulation"
 
 Settings (GNSS model, the filter's sigma_a and initial velocity uncertainty
 per platform mode, realisations) are in `experiments/receiver_filter.json`.
-Output: `overview.png` (position and velocity RMSE per case and variant),
-`time_series_<case>.png` (one run's east error over time with the filter's
-+/-2 sigma), `consistency.png` (mean NEES over time against its 95% band),
-`summary.csv`, `manifest.json`.
+Output, one question per figure:
+
+| File | Answers |
+|---|---|
+| `accuracy.png` | how accurate: position and velocity RMSE per kind of motion and method, values on the bars |
+| `velocity_tracking.png` | what it looks like: true east velocity against each estimate (straight, circle, oscillate), with a zoom |
+| `honesty.png` | does the filter know how wrong it is: error claimed vs made, and how often the truth is inside its +/-2 sigma (95% = honest), for velocity and position |
+| `error_vs_acceleration.png` | why some cases are worse: velocity error against the receiver's true acceleration |
+| `summary.csv`, `manifest.json` | the numbers and settings |
