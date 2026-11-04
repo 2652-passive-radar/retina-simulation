@@ -662,3 +662,14 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
 - Worth trying for the manoeuvring cases: sigma_a ~1 m/s^2 for vehicles, a
   Singer (Gauss-Markov acceleration) or constant-acceleration model, or the
   adaptive modes discussed.
+
+### Figures simplified again (2026-11-04)
+- At your request, two figures only: `case_<case>.png` (one run per case,
+  position error and velocity per axis, all methods, both filters' +/-2
+  sigma) and `rmse.png` (3D RMSE per case and over all cases).
+- 3D RMSE over all cases (20 runs each, from 30 s): position KF-drift 2.61 m,
+  KF-white 2.71 m, raw 2.89 m; velocity 0.59, 0.70, 1.35 m/s.
+- KF-white is better only for velocity on unaccelerated motion (static and
+  straight: 0.15 vs 0.21 m/s walking, 0.30 vs 0.56 m/s driving); worse in
+  every accelerating case (circle drive 0.88 vs 0.77, oscillate drive 1.78
+  vs 1.26 m/s, position 3.48 vs 2.79 m) and overall.
