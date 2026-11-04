@@ -1,0 +1,23 @@
+{
+  "name": "receiver-filter",
+  "description": "Step 3b of the receiver-motion study: the receiver's position and velocity estimated by a Kalman filter from simulated GNSS position fixes (true trajectory + the step 3a error model), for every step 1 motion case. No radar: the filter is checked against the true trajectory. Variants: kf (state [x, v, nu] per axis, nu the GNSS error's Gauss-Markov part), white (same filter treating all GNSS error as white), raw (latest fix, velocity by differencing).",
+  "base": "receiver_doppler.json",
+  "gnss": {
+    "sigma_white_m": 0.5,
+    "sigma_corr_m": 1.5,
+    "tau_s": 60.0,
+    "rate_hz": 1.0,
+    "time_offset_s": 0.0,
+    "latency_s": 0.0
+  },
+  "filter": {
+    "modes": {
+      "none": {"sigma_a": 0.1, "sigma_v0": 2.0},
+      "walk": {"sigma_a": 0.1, "sigma_v0": 2.0},
+      "vehicle": {"sigma_a": 0.5, "sigma_v0": 20.0}
+    },
+    "variants": ["kf", "white", "raw"]
+  },
+  "realisations": 4,
+  "steady_state_from_s": 30.0
+}

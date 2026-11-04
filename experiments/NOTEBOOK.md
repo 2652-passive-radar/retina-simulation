@@ -552,3 +552,92 @@ vehicle and 28% north vehicle)
 ### Next (not started)
 - 3b: Kalman filter estimating receiver position and velocity from these
   fixes, with `nu` in its model.
+
+## Step 3b: receiver Kalman filter (2026-11-04)
+
+### Decided with you
+- GNSS gives position only; the filter estimates velocity.
+- Per axis (east, north, up, same parameters), a linear Kalman filter on
+  `x = [x, v, nu]`: position, velocity and the GNSS error's Gauss-Markov part.
+  No EKF: GNSS position in local metres is linear in the state, and so is the
+  motion model; turns are absorbed as random acceleration.
+  - `F = [[1, dt, 0], [0, 1, 0], [0, 0, a]]`, `a = exp(-dt/T)`
+  - `Q = [[sa^2 dt^4/4, sa^2 dt^3/2, 0], [sa^2 dt^3/2, sa^2 dt^2, 0],
+    [0, 0, sigma_corr^2 (1 - a^2)]]` (white acceleration held over each step)
+  - `z = H x + eps`, `H = [1 0 1]`, `R = sigma_white^2`
+  - start `x0 = [z0, 0, 0]`, `P0 = [[sigma_corr^2 + sigma_white^2, 0,
+    -sigma_corr^2], [0, sigma_v0^2, 0], [-sigma_corr^2, 0, sigma_corr^2]]`:
+    starting at the fix makes the position error -(nu + eps), hence the
+    off-diagonal term
+  - Joseph-form update at every later fix; at each radar tick, predict only,
+    from the last fix that has arrived (known latency respected).
+- Fixed platform modes: sigma_a 0.1 m/s^2 and sigma_v0 2 m/s for static and
+  walking, 0.5 m/s^2 and 20 m/s for vehicles. Adaptive variants (mode
+  scheduling, zero-velocity updates, innovation-based Q) later.
+- The filter's GNSS parameters match the model's (sigma_white 0.5 m,
+  sigma_corr 1.5 m, T 60 s, 1 Hz, no offset or latency).
+
+### Built
+- `tools/rx_filter.py`: `AxisFilter`, `run` (estimates at query times, causal),
+  `nees`; variants `kf`, `white` (no drift state, R = sigma_white^2 +
+  sigma_corr^2) and `raw` (latest fix, velocity by differencing, extrapolated).
+  Lives with the solver tools (numpy); the GNSS model stays in the simulator.
+- `experiments/receiver_filter.json`, `tools/rx_filter_report.py`: every
+  step 1 motion case x 5 seeds x 4 GNSS realisations = 20 runs per case;
+  scored from 30 s on.
+
+### Verified
+- `tests/test_rx_filter.py` (6). The decisive one: on truth that obeys the
+  filter's own model (white acceleration of its sigma_a, the 3a GNSS error),
+  **mean NEES 6.07 for 6 dof**: the filter's stated uncertainty matches its
+  error. The white-noise filter scores 11.5 (overconfident ~2x) and has higher
+  velocity error (0.89 vs 0.75 m/s). Also: P0 equals a normal first update
+  from a diffuse start; converges on a noise-free straight line; uses no fix
+  before it arrives; raw differencing; prediction to the query time.
+- With nearly noise-free fixes and sigma_a 0.5 the velocity error is ~0.08 m/s
+  (filter's own sigma 0.10): sigma_a sets how little it smooths.
+
+### Results (20 runs per case, from 30 s; GNSS fixes themselves 2.01 m RMS horizontal)
+
+| Case | KF pos | KF vel | White-filter vel | Raw vel | KF NEES (6 = honest) | White NEES |
+|---|---|---|---|---|---|---|
+| static, linear walk (both directions) | 1.99 m | 0.17 m/s | 0.12 | 1.07 | 3.6 | 13.7 |
+| linear vehicle (both directions) | 2.07 m | 0.45 | 0.25 | 1.07 | 3.4 | 6.5 |
+| oscillate-walk | 2.03 m | 0.33 | 0.40 | 1.07 | 5.6 | 16.3 |
+| oscillate-vehicle | 2.26 m | 1.21 | 1.77 | 1.29 | 6.7 | 11.4 |
+| circle-walk | 1.99 m | 0.22 | 0.22 | 1.07 | 4.1 | 14.2 |
+| circle-vehicle | 2.09 m | 0.70 | 0.86 | 1.12 | 4.2 | 7.6 |
+
+(horizontal RMSE; vertical: KF 1.6 m, 0.12-0.32 m/s. Reference: 0.58 m/s of
+receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
+2 Hz noise in the worst geometry.)
+
+### Findings
+1. **Position cannot beat the GNSS drift.** Every variant sits at the fixes'
+   own ~2 m: the slow drift goes straight into the position estimate, as
+   predicted. For G this costs ~2-4 m of aircraft error, small next to 80 m.
+2. **Velocity is where filtering pays**: 1.07 m/s raw -> 0.17 m/s (walking) and
+   0.45 m/s (straight driving), under the 0.58 m/s reference.
+3. **Turns cost lag.** sigma_a 0.5 is below oscillate-vehicle's 0.94 m/s^2
+   peaks: its velocity error is a +/-2 m/s sine (1.21 m/s RMS), barely better
+   than raw, and the filter is overconfident at each turnaround (NEES ~10).
+   circle-vehicle (0.31 m/s^2, constant) lags less (0.70 m/s). Motion model,
+   not GNSS, limits these cases.
+4. **The drift state makes the uncertainty honest.** Treating the GNSS error as
+   white is overconfident by ~2x everywhere (NEES 6.5-16); with the drift
+   state the filter is consistent on truth that matches its model, and on our
+   straight cases slightly cautious (NEES 3.4-3.6), because their true
+   acceleration is zero, below the assumed sigma_a.
+5. **The white filter's lower velocity error on straight lines is an
+   artefact of over-smoothing**: its large R smooths harder, which helps when
+   nothing accelerates and hurts in every turn (oscillate 1.77, circle 0.86
+   m/s). It also claims accuracy it does not have.
+6. Linear and static cases give identical numbers per speed class: the same
+   GNSS draws through a linear filter on linear motion. A check, not a
+   coincidence.
+
+### Next (not started)
+- 3c: feed the KF pose (and raw GNSS) to G and GD on the step 2 recordings.
+- Worth trying for the manoeuvring cases: sigma_a ~1 m/s^2 for vehicles, a
+  Singer (Gauss-Markov acceleration) or constant-acceleration model, or the
+  adaptive modes discussed.

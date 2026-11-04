@@ -283,3 +283,24 @@ cd "$root\libs\retina-simulation"
 `gnss_autocorrelation.png` (theory against simulated, as in the paper),
 `gnss_error_time_series.png`, `gnss_time_constant.png`, `gnss_rate_check.png`,
 `gnss_horizontal_error.png` and `stats.csv` (set against measured values).
+
+## Step 3b: receiver Kalman filter
+
+`tools/rx_filter.py`: per axis a linear Kalman filter on [position, velocity,
+GNSS drift], fed by GNSS position fixes (step 3a), starting at the first fix.
+`tools/rx_filter_report.py` runs it on every step 1 motion case (5 seeds x 4
+GNSS realisations each, about 25 s, no radar) against the true trajectory,
+with two baselines: the same filter treating GNSS error as white, and raw fixes
+with differenced velocity.
+
+```
+cd "$root\libs\retina-simulation"
+..\..\backend\.venv\Scripts\python.exe tools\rx_filter_report.py experiments\receiver_filter.json --out "C:\radar-runs\receiver-filter\$(Get-Date -Format yyyy-MM-dd_HHmmss)"
+```
+
+Settings (GNSS model, the filter's sigma_a and initial velocity uncertainty
+per platform mode, realisations) are in `experiments/receiver_filter.json`.
+Output: `overview.png` (position and velocity RMSE per case and variant),
+`time_series_<case>.png` (one run's east error over time with the filter's
++/-2 sigma), `consistency.png` (mean NEES over time against its 95% band),
+`summary.csv`, `manifest.json`.
