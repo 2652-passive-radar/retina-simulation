@@ -673,3 +673,13 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
   straight: 0.15 vs 0.21 m/s walking, 0.30 vs 0.56 m/s driving); worse in
   every accelerating case (circle drive 0.88 vs 0.77, oscillate drive 1.78
   vs 1.26 m/s, position 3.48 vs 2.79 m) and overall.
+
+### Final figures for 3b (2026-11-04)
+- `rmse.png` (3D RMSE, three methods, every case and all cases) and
+  `coverage.png` (share of time the truth is inside each filter's +/-2 sigma).
+- Coverage, all cases: KF with drift 97% position / 98% velocity; white-noise
+  KF 85% / 97%. The white KF is overconfident in position in every case
+  (76-95%); both are overconfident in velocity only when oscillating
+  (drift KF 93% / 87%, white 90% / 82%), the case whose acceleration exceeds
+  sigma_a.
+- Decision: proceed with the KF with the GNSS drift state.

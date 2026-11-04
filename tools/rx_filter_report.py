@@ -16,13 +16,11 @@ the model's.
 
 Writes to ``runs/receiver-filter/<date_time>/`` (or ``--out``):
 
-``case_<case>.png``  one run of that case over the full 300 s: position error
-                     (estimate minus truth, so the truth is the zero line) and
-                     velocity (estimate over the truth), east / north / up,
-                     with both filters' +/-2 sigma bands
 ``rmse.png``         position and velocity RMSE (3D: east, north and up
                      together) of the three methods, per case and over all
                      cases
+``coverage.png``     how often the true position and velocity are inside each
+                     filter's +/-2 sigma (95% = honest), per case and overall
 ``summary.csv``      the numbers: 3D and horizontal RMSE per case and method,
                      the GNSS fixes' own error, mean NEES / NIS
 ``manifest.json``    settings and code version
@@ -145,7 +143,15 @@ def stats(recs: list[dict], fix: list[float]) -> dict:
         "gnss_fix_rmse_3d_m": _rms(fix),
         "nees_mean": round(float(np.mean(nees)), 3) if nees else None,
         "nis_mean": round(float(np.mean(nis)), 3) if nis else None,
+        "pos_inside_2sd": _inside(recs, "p", "tp", "sp"),
+        "vel_inside_2sd": _inside(recs, "v", "tv", "sv"),
     }
+
+
+def _inside(recs: list[dict], k: str, tk: str, sk: str) -> float | None:
+    """Share of (tick, axis) samples whose true value is within the filter's +/-2 sigma."""
+    hits = [abs(r[f"{k}_{a}"] - r[f"{tk}_{a}"]) <= 2 * r[f"{sk}_{a}"] for r in recs for a in AXES if r[f"{sk}_{a}"]]
+    return round(float(np.mean(hits)), 4) if hits else None
 
 
 def plot_case(path: str, title: str, res: dict, variants) -> None:
@@ -217,6 +223,44 @@ def plot_rmse(path: str, title: str, rows: list[dict], variants) -> None:
     _save(fig, path)
 
 
+def plot_coverage(path: str, title: str, rows: list[dict]) -> None:
+    filters = ("kf", "white")
+    cases = list(dict.fromkeys(r["case"] for r in rows))
+    by = {(r["case"], r["variant"]): r for r in rows}
+    fig, axes = plt.subplots(2, 1, figsize=(15, 9), facecolor=SURFACE)
+    x = np.arange(len(cases))
+    w = 0.8 / len(filters)
+    for ax, (key, label) in zip(
+        axes,
+        (
+            ("pos_inside_2sd", "Position: truth inside +/-2 sigma (%)"),
+            ("vel_inside_2sd", "Velocity: truth inside +/-2 sigma (%)"),
+        ),
+    ):
+        _style(ax)
+        ax.grid(axis="x", visible=False)
+        for k, v in enumerate(filters):
+            vals = [100 * by[(c, v)][key] for c in cases]
+            xs = x + (k - (len(filters) - 1) / 2) * w
+            ax.bar(xs, vals, width=w - 0.02, color=VAR_COLOUR[v], label=VAR_LABEL[v])
+            for xx, val in zip(xs, vals):
+                ax.text(xx, val, f"{val:.0f}", ha="center", va="bottom", fontsize=8, color=INK_2)
+        ax.axhline(95, color=INK, linestyle=(0, (5, 3)), linewidth=1.3, label="95%: honest uncertainty")
+        ax.axvline(len(cases) - 1.5, color=INK_2, linewidth=0.8)
+        ax.set_xticks(x)
+        ax.set_xticklabels(cases, fontsize=9)
+        ax.set_ylabel(label, color=INK, fontsize=10)
+        ax.set_ylim(50, 104)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(0.01, 0.955), ncol=3, fontsize=9, frameon=False,
+               labelcolor=INK_2)  # fmt: skip
+    fig.suptitle(title, color=INK, fontsize=12.5, x=0.01, ha="left")
+    fig.text(0.01, 0.005, "Below 95%: the filter is overconfident (its real error is larger than it claims). "
+             "Above: it is cautious. East, north and up pooled.", color=INK_2, fontsize=8.5)  # fmt: skip
+    fig.tight_layout(rect=(0, 0.02, 1, 0.93))
+    _save(fig, path)
+
+
 def _commit() -> str | None:
     try:
         return subprocess.check_output(["git", "-C", _REPO, "rev-parse", "--short", "HEAD"], text=True).strip()
@@ -245,9 +289,6 @@ def main() -> None:
             recs = _steady(exp, res[v])
             pooled[v] += recs
             rows.append({"case": case["id"], "variant": v, "runs": n_runs} | stats(recs, fix))
-        seed = exp["runs"][0]["seed"]
-        plot_case(os.path.join(out, f"case_{case['id']}.png"),
-                  f"{case['id']}: one run (seed {seed}, GNSS realisation 0)", res, variants)  # fmt: skip
         print(f"  {case['id']}")
     for v in variants:
         rows.append(
@@ -261,6 +302,9 @@ def main() -> None:
     plot_rmse(os.path.join(out, "rmse.png"),
               f"Receiver position and velocity RMSE (3D), {n_runs} runs per case, after the first "
               f"{exp.get('steady_state_from_s', 0):g} s", rows, variants)  # fmt: skip
+    plot_coverage(os.path.join(out, "coverage.png"),
+                  f"How often the truth is inside each Kalman filter's +/-2 sigma, {n_runs} runs per case, after the "
+                  f"first {exp.get('steady_state_from_s', 0):g} s", rows)  # fmt: skip
     with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(
             {

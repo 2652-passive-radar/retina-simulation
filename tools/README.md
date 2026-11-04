@@ -304,6 +304,6 @@ Output:
 
 | File | Holds |
 |---|---|
-| `case_<case>.png` | one run per motion case: position error (truth = zero line) and velocity over the truth, east / north / up, all three methods, both filters' +/-2 sigma bands |
+| `coverage.png` | how often the true position and velocity are inside each Kalman filter's +/-2 sigma (95% = honest), per case and over all cases |
 | `rmse.png` | 3D position and velocity RMSE of the three methods, per case and over all cases |
 | `summary.csv`, `manifest.json` | the numbers (3D and horizontal RMSE, NEES/NIS) and settings |
