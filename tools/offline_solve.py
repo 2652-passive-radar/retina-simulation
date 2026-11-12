@@ -275,7 +275,9 @@ def _solve_doppler_compensated(meas: list[dict], moved: list[dict], pose: dict, 
     return res, guess, reason, corr
 
 
-def solve_run(run_dir: str, solver_cfg: dict | None = None, receiver: str = "stationary") -> list[dict]:
+def solve_run(
+    run_dir: str, solver_cfg: dict | None = None, receiver: str = "stationary", pose_estimate: dict | None = None
+) -> list[dict]:
     """Solve every tick of a recording.
 
     ``receiver`` says what the solver is told about where the receivers are:
@@ -293,6 +295,12 @@ def solve_run(run_dir: str, solver_cfg: dict | None = None, receiver: str = "sta
     ``rxdop_true_hz_<node>``: the receiver Doppler in that node's measurement,
     from the true aircraft position.  GD rows add ``rxdop_corr_hz_<node>``,
     the correction GD subtracted.
+
+    ``pose_estimate`` ({t_ms: {node_id: pose}}, the rx_trajectory format)
+    replaces the true receiver pose given to G and GD, e.g. a GNSS-based
+    estimate.  The receiver offset, bias and true receiver Doppler columns
+    still describe the truth, and each row adds ``rx_pos_err_m`` and
+    ``rx_vel_err_ms``, the estimate's horizontal error.
     """
     if receiver not in RECEIVER_MODES:
         raise ValueError(f"unknown receiver mode {receiver!r}")
@@ -328,6 +336,16 @@ def solve_run(run_dir: str, solver_cfg: dict | None = None, receiver: str = "sta
                     adsb = adsb or d.get("adsb")
         row = {"t_ms": t_ms, "t_s": round((t_ms - t_first) / 1000.0 + 1.0, 3), "n_nodes": len(meas)}
         pose = poses.get(t_ms) or {}
+        used = pose if pose_estimate is None else pose_estimate.get(t_ms) or {}
+        if pose_estimate is not None and pose and used:
+            est, tru = next(iter(used.values())), next(iter(pose.values()))
+            row["rx_pos_err_m"] = round(
+                math.hypot(est["offset_east_m"] - tru["offset_east_m"], est["offset_north_m"] - tru["offset_north_m"]),
+                3,
+            )
+            row["rx_vel_err_ms"] = round(
+                math.hypot(est["vel_east_ms"] - tru["vel_east_ms"], est["vel_north_ms"] - tru["vel_north_ms"]), 4
+            )
         if pose:
             first = next(iter(pose.values()))
             oe, on = first.get("offset_east_m", 0.0), first.get("offset_north_m", 0.0)
@@ -356,12 +374,12 @@ def solve_run(run_dir: str, solver_cfg: dict | None = None, receiver: str = "sta
             row.update(published=False, reason=f"n_nodes<{cfg['min_nodes']}")
             rows.append(row)
             continue
-        if receiver == "geometric_doppler" and pose:
-            res, guess, reason, corr = _solve_doppler_compensated(meas, _at_pose(nodes, pose), pose, cfg)
+        if receiver == "geometric_doppler" and used:
+            res, guess, reason, corr = _solve_doppler_compensated(meas, _at_pose(nodes, used), used, cfg)
             for nid, f in corr.items():
                 row[f"rxdop_corr_hz_{_short(nid)}"] = round(f, 3)
-        elif receiver != "stationary" and pose:
-            moved = _at_pose(nodes, pose)
+        elif receiver != "stationary" and used:
+            moved = _at_pose(nodes, used)
             res, guess, reason = solve_epoch(meas, {n["node_id"]: n for n in moved}, Geometry(moved), cfg)
         else:
             res, guess, reason = solve_epoch(meas, node_cfgs, geo, cfg)

@@ -67,25 +67,13 @@ def _truth(motion, t: float) -> dict:
     return {"east": (e, ve), "north": (n, vn), "up": (0.0, 0.0)}
 
 
-def filter_config(exp: dict, case: dict) -> rx_filter.FilterConfig:
-    mode = exp["filter"]["modes"][case.get("speed", "none")]
-    g = exp["gnss"]
-    return rx_filter.FilterConfig(
-        sigma_a=mode["sigma_a"],
-        sigma_v0=mode["sigma_v0"],
-        sigma_white=g["sigma_white_m"],
-        sigma_corr=g["sigma_corr_m"],
-        tau_s=g["tau_s"],
-    )
-
-
 def run_case(exp: dict, case: dict) -> dict:
     """Per method, a list of runs, each a list of per-tick records (None
     before the first fix).  A record holds, per axis, the estimate, the truth
     and (filters) the standard deviation, for position and velocity."""
     model = gnss.model_from(exp["gnss"])
     motion = motion_from(case["motion"])
-    cfg = filter_config(exp, case)
+    cfg = rx_filter.config_for(exp, case)
     tick = exp.get("tick_s", 1.0)
     ticks = [i * tick for i in range(1, int(round(exp["duration_s"] / tick)) + 1)]
     out: dict[str, list] = {v: [] for v in exp["filter"]["variants"]}

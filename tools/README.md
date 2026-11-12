@@ -307,3 +307,31 @@ Output:
 | `coverage.png` | how often the true position and velocity are inside each Kalman filter's +/-2 sigma (95% = honest), per case and over all cases |
 | `rmse.png` | 3D position and velocity RMSE of the three methods, per case and over all cases |
 | `summary.csv`, `manifest.json` | the numbers (3D and horizontal RMSE, NEES/NIS) and settings |
+
+## Step 3c: GD with the receiver pose from GNSS
+
+`experiments/receiver_gnss.json` solves every step 2 recording (receiver
+Doppler on) with GD only, once per receiver-trajectory source:
+
+| Source | Receiver position and velocity given to GD |
+|---|---|
+| `truth` | the true trajectory (step 2) |
+| `gnss` | the latest GNSS fix, velocity by differencing it with the one before |
+| `kf` | the receiver Kalman filter with the GNSS drift state (step 3b) |
+
+GNSS fixes come from the step 3a model with the same keys as step 3b, 4
+realisations per seed (20 runs per case for `gnss` and `kf`, 5 for `truth`).
+
+```
+cd "$root\libs\retina-simulation"
+..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\receiver_gnss.json --out "C:\radar-runs\receiver-gnss\$(Get-Date -Format yyyy-MM-dd_HHmmss)"
+```
+
+About 400 GD solves (roughly 40 minutes on 4 cores; `--jobs` as before).
+`--reanalyze <folder>` rebuilds the figures. Output:
+
+| File | Holds |
+|---|---|
+| `rmse.png` | aircraft position and velocity RMSE per motion case and over all cases, one bar per source; whiskers span the single-run RMSEs |
+| `summary.csv` | per case and source: aircraft RMSE (from 30 s and over the whole run), the spread over runs, the receiver pose error GD was given, the RMS error of GD's Doppler correction |
+| `cases\<case>\doppler-on\seed-<n>\analysis\offline_solves_gd_<source>[_r<k>].csv` | every solve, with `rx_pos_err_m` and `rx_vel_err_ms` for the estimated sources |

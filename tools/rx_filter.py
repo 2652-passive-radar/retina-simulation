@@ -50,6 +50,21 @@ class FilterConfig:
     tau_s: float = 60.0
 
 
+def config_for(exp: dict, case: dict) -> FilterConfig:
+    """The filter for one motion case: acceleration noise and initial velocity
+    uncertainty from the case's platform mode, GNSS error parameters matched to
+    the experiment's GNSS model."""
+    mode = exp["filter"]["modes"][case.get("speed", "none")]
+    g = exp["gnss"]
+    return FilterConfig(
+        sigma_a=mode["sigma_a"],
+        sigma_v0=mode["sigma_v0"],
+        sigma_white=g["sigma_white_m"],
+        sigma_corr=g["sigma_corr_m"],
+        tau_s=g["tau_s"],
+    )
+
+
 def _a(cfg: FilterConfig, dt: float) -> float:
     return math.exp(-dt / cfg.tau_s) if cfg.tau_s > 0 else 0.0
 

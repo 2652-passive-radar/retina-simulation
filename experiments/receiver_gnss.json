@@ -1,0 +1,15 @@
+{
+  "name": "receiver-gnss",
+  "description": "Step 3c of the receiver-motion study: GD (geometric + receiver Doppler compensation) on the step 2 recordings (receiver Doppler on), with the receiver pose taken from the true trajectory, from raw GNSS fixes (velocity by differencing), and from the receiver Kalman filter with the GNSS drift state (step 3b). GNSS fixes from the step 3a model with the step 3b keys, 4 realisations per seed.",
+  "base": "receiver_filter.json",
+  "algorithms": [
+    "geometric_doppler"
+  ],
+  "pose_sources": [
+    "truth",
+    "gnss",
+    "kf"
+  ],
+  "realisations": 4,
+  "steady_state_from_s": 30.0
+}
