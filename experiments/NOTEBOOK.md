@@ -683,3 +683,77 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
   (drift KF 93% / 87%, white 90% / 82%), the case whose acceleration exceeds
   sigma_a.
 - Decision: proceed with the KF with the GNSS drift state.
+
+## Step 3c: GD with the receiver pose from GNSS (2026-11-12)
+
+### Decided with you
+- GD only (the algorithm we will implement), to isolate the effect of how the
+  receiver trajectory is obtained.
+- Three receiver-trajectory sources: the truth (step 2), raw GNSS fixes
+  (velocity by differencing consecutive fixes), and the drift-state Kalman
+  filter from 3b. The white-noise KF is left out.
+- GNSS at the 3a defaults; 4 realisations per seed, same keys as 3b, so 3b and
+  3c see identical GNSS errors.
+
+### Built
+- `offline_solve.solve_run(..., pose_estimate=...)`: replaces the true receiver
+  pose given to G/GD; the true-pose columns (offset, bias, true receiver
+  Doppler) are kept, and each row adds `rx_pos_err_m` / `rx_vel_err_ms`.
+- `tools/gnss_pose.py`: per radar tick, the GNSS-based pose in the
+  rx_trajectory format (east/north/up offset to lat/lon/alt on WGS84, velocity).
+- `experiments/receiver_gnss.json` (base `receiver_filter.json`),
+  `tools/gnss_experiment.py`, `tools/gnss_report.py`: 9 cases x 5 seeds, truth
+  once and gnss / kf x 4 realisations: 405 GD solves (~39 min on 4 cores).
+  Recordings fingerprint-checked against step 2.
+
+### Verified
+- `tests/test_gnss_pose.py` (6): near-noiseless GNSS gives poses on the true
+  trajectory; pose positions are the offsets on the ellipsoid; identical GNSS
+  draws to 3b; realisations differ and repeat; `truth` adds no estimate; a
+  truth override reproduces step 2's GD solves exactly, and a KF override
+  reports a plausible receiver velocity error.
+
+### Results (from 30 s; RMSE pooled over 5 runs for truth, 20 for gnss and kf)
+
+| Case | Aircraft pos (truth / gnss / kf), m | Aircraft vel (truth / gnss / kf), m/s | Receiver vel error (gnss / kf), m/s | GD correction error (truth / gnss / kf), Hz |
+|---|---|---|---|---|
+| static | 81.3 / 81.3 / 81.2 | 3.58 / 3.67 / 3.58 | 1.07 / 0.17 | 0.00 / 1.04 / 0.16 |
+| linear-east-walk | 81.0 / 81.6 / 81.5 | 3.60 / 3.69 / 3.60 | 1.07 / 0.17 | 0.01 / 1.04 / 0.16 |
+| linear-east-vehicle | 82.9 / 83.8 / 84.1 | 3.85 / 3.95 / 3.88 | 1.07 / 0.45 | 0.10 / 1.09 / 0.47 |
+| linear-north-walk | 81.1 / 81.4 / 81.4 | 3.58 / 3.68 / 3.59 | 1.07 / 0.17 | 0.01 / 1.03 / 0.16 |
+| linear-north-vehicle | 83.3 / 83.0 / 83.0 | 3.66 / 3.74 / 3.67 | 1.07 / 0.45 | 0.08 / 1.00 / 0.43 |
+| oscillate-walk | 81.4 / 81.6 / 81.5 | 3.58 / 3.67 / 3.59 | 1.07 / 0.33 | 0.01 / 1.04 / 0.26 |
+| oscillate-vehicle | 81.7 / 81.7 / 81.4 | 3.58 / 3.72 / 3.72 | 1.29 / 1.22 | 0.06 / 1.16 / 0.93 |
+| circle-walk | 81.6 / 81.6 / 81.7 | 3.57 / 3.67 / 3.58 | 1.07 / 0.22 | 0.01 / 1.04 / 0.21 |
+| circle-vehicle | 81.0 / 81.1 / 81.1 | 3.58 / 3.69 / 3.64 | 1.12 / 0.70 | 0.08 / 1.09 / 0.68 |
+| **all cases** | **81.7 / 81.9 / 81.9** | **3.62 / 3.72 / 3.65** | **1.10 / 0.54** | **0.05 / 1.06 / 0.46** |
+
+(receiver position error: gnss 2.29 m, kf 2.07 m RMS horizontal)
+
+### Findings
+1. **GNSS-based trajectories cost GD almost nothing.** Over all cases the KF
+   adds 0.2 m of aircraft position RMSE (81.7 -> 81.9 m) and 0.03 m/s of
+   velocity RMSE (3.62 -> 3.65 m/s); raw GNSS adds 0.2 m and 0.10 m/s. Both
+   differences are far smaller than the run-to-run spread (whiskers).
+2. **Position:** a ~2 m receiver position error is invisible against the
+   ~80 m aircraft error, as predicted (about 0.8-1.9 m of aircraft error per
+   metre of receiver error, added in quadrature to 80 m).
+3. **Velocity:** the KF matches the truth to within 0.01-0.02 m/s wherever its
+   receiver velocity error is below ~0.5 m/s (static, walking, straight
+   driving). Raw GNSS is consistently ~0.1 m/s worse (its 1.07 m/s receiver
+   velocity error gives a ~1 Hz Doppler correction error).
+4. **Only the turning vehicle cases show the KF's lag:** oscillate-vehicle
+   (receiver velocity error 1.22 m/s, the same as raw) and circle-vehicle
+   (0.70 m/s), +0.14 and +0.06 m/s of aircraft velocity error.
+5. **GD tolerates much more receiver velocity error than the 0.58 m/s
+   estimate.** Even ~1.2 m/s (about 1 Hz of correction error, half the 2 Hz
+   measurement noise) adds only ~4% to the aircraft velocity RMSE: the
+   correction error adds in quadrature to the measurement noise, and the
+   0.58 m/s figure assumed the worst geometry on every channel at once.
+
+### Next (not started)
+- Suggested extra figures: aircraft velocity error against receiver velocity
+  error (measured tolerance), and the increase over the truth-fed result per
+  case.
+- 3d: Monte Carlo over the GNSS parameters, with ranges wide enough to find
+  where GD starts to degrade.
