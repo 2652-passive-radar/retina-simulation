@@ -99,9 +99,43 @@ def test_finished_solves_are_not_repeated(tmp_path):
     out = str(tmp_path)
     tasks = gnss_mc.tasks_for(exp, out)
     found, _, _ = gnss_mc.levels(exp)
-    n_rec = len(gnss_mc.recordings(exp, out))
-    assert len(tasks) == n_rec * (1 + len(found) * exp["realisations"])
+    recs = gnss_mc.recordings(exp, out)
+    assert len(tasks) == len(recs) + len(found) * sum(gnss_mc.realisations_for(exp, c) for _, c, _ in recs)
+    assert {gnss_mc.realisations_for(exp, c) for _, c, _ in recs} == {2, 4}
     path = tasks[0][0]
     os.makedirs(os.path.join(path, "analysis"))
     open(os.path.join(path, "analysis", gnss_mc.solve_file("truth", None)), "w").close()
     assert len(gnss_mc.tasks_for(exp, out)) == len(tasks) - 1
+
+
+def test_linearised_response_steps_over_a_layer_flip(tmp_path):
+    import csv
+
+    import gnss_linear
+
+    exp = _exp()
+    h = gnss_linear.steps(exp)
+    d = tmp_path / "analysis"
+    d.mkdir()
+
+    def write(name, rows):
+        with open(d / name, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["t_s", "est_alt_m", *gnss_linear.OUT_KEYS])
+            w.writeheader()
+            for t, alt, a in rows:
+                w.writerow({"t_s": t, "est_alt_m": alt, **dict(zip(gnss_linear.OUT_KEYS, a, strict=True))})
+
+    a0 = [10.0, -5.0, 1.0, 0.5]
+    write(gnss_mc.solve_file("truth", None), [(31.0, "3000", a0)])
+    for j in range(len(gnss_linear.INPUTS)):
+        for sign in (+1, -1):
+            a = [a0[0] + sign * h[j] * (j + 1), a0[1], a0[2] + sign * h[j] * 0.1, a0[3]]
+            alt = "5000" if (j == 0 and sign > 0) else "3000"
+            if alt == "5000":
+                a[0] += 80.0
+            write(gnss_linear.jac_file(j, sign), [(31.0, alt, a)])
+    (a, J) = gnss_linear.jacobian(str(tmp_path), exp)[31.0]
+    assert list(a) == a0
+    assert J[0] == pytest.approx([1, 2, 3, 4, 5, 6])
+    assert J[2] == pytest.approx([0.1] * 6)
+    assert gnss_linear.layer_flips(str(tmp_path)) == (1, 1)

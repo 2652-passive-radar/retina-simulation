@@ -67,7 +67,6 @@ def collect(out: str, exp: dict) -> tuple[dict, dict]:
     and {case: [run keys]} in a fixed order."""
     found, _, _ = gnss_mc.levels(exp)
     t0 = exp.get("steady_state_from_s", 0.0)
-    nreal = exp.get("realisations", 1)
     keys = {}
     data = {lid: {} for lid in found}
     for path, case, seed in gnss_mc.recordings(exp, out):
@@ -75,7 +74,7 @@ def collect(out: str, exp: dict) -> tuple[dict, dict]:
         if not os.path.exists(tp):
             continue
         truth = {x["t_s"]: x for x in load(tp)}
-        for r in range(nreal):
+        for r in range(gnss_mc.realisations_for(exp, case)):
             keys.setdefault(case["id"], []).append((seed, r))
             for lid in found:
                 s = run_sums(os.path.join(path, "analysis", gnss_mc.solve_file(lid, r)), truth, t0)
@@ -426,12 +425,117 @@ def _write_csv(path: str, rows: list[dict], fields: list[str]) -> None:
             w.writerow({k: ("" if r.get(k) is None else r.get(k)) for k in fields})
 
 
+def collect_linear(path: str, max_real: int | None = None) -> tuple[dict, dict, dict]:
+    """From gnss_linear's linear_runs.csv: the same {level: {case: runs x 7}} and
+    {case: run keys} as collect(), and stage A's {level: {case: consistency sums}}."""
+    runs, keys, scr = {}, {}, {}
+    with open(path, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if max_real is not None and int(r["realisation"]) >= max_real:
+                continue
+            v = [float(r[k]) for k in ("pos_kf_ss", "pos_truth_ss", "vel_kf_ss", "vel_truth_ss", "rx_pos_ss_m2",
+                                        "rx_vel_ss_ms2", "ticks")]  # fmt: skip
+            runs.setdefault(r["level"], {}).setdefault(r["case"], {})[(int(r["seed"]), int(r["realisation"]))] = v
+            acc = scr.setdefault(r["level"], {}).setdefault(r["case"], np.zeros(7))
+            acc += [float(r["ticks"]), float(r["rx_pos_ss_m2"]), float(r["rx_vel_ss_ms2"]), float(r["pos_in_2sigma"]),
+                    float(r["vel_in_2sigma"]), float(r["nis_sum"]), float(r["nis_n"])]  # fmt: skip
+    for by_case in runs.values():
+        for c, d in by_case.items():
+            keys.setdefault(c, sorted(d))
+    complete = {
+        lid: {c: np.array([d[k] for k in keys[c]]) for c, d in by_case.items()} for lid, by_case in runs.items()
+    }
+    return complete, keys, scr
+
+
+def plot_validation(path: str, exp: dict, full: dict, lin_same: dict, lin_many: dict, keys: dict) -> list[dict]:
+    """Full GD solves against the linear prediction from the same GNSS draws (and
+    from all the linear realisations), for every level both have."""
+    common = [lid for lid in full if lid in lin_same]
+    rows = []
+    for lid in common:
+        for c in [*full[lid], POOLED]:
+
+            def inc(d, out, lid=lid, c=c):
+                return increase(np.concatenate(list(d[lid].values())) if c == POOLED else d[lid][c], out)
+
+            rows.append({"level": lid, "case": c, **{f"full_{o}": inc(full, o) for o, _ in OUTPUTS},
+                         **{f"linear_{o}": inc(lin_same, o) for o, _ in OUTPUTS}})  # fmt: skip
+    if not rows:
+        return rows
+    _, sweeps, _ = gnss_mc.levels(exp)
+    sw = next((s for s in exp.get("sweeps", []) if s["id"] == exp.get("linear", {}).get("validate_levels")), None)
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5), facecolor=SURFACE)
+    idx = boot_indices(keys)
+    if sw:
+        pts = [(v, lid) for v, lid in sweeps[sw["id"]] if lid in full and lid in lin_same]
+        xs = [v for v, _ in pts]
+        for ax, (output, name) in zip(axes[:2], OUTPUTS):
+            _style(ax)
+            f = [increase(np.concatenate(list(full[lid].values())), output) for _, lid in pts]
+            b = np.array([np.percentile(boot_increase(full[lid], idx, output), CI) for _, lid in pts])
+            ax.errorbar(xs, f, yerr=[np.array(f) - b[:, 0], b[:, 1] - np.array(f)], fmt="o", color=INK, capsize=3,
+                        markersize=5, label="full GD solves (90% interval)", zorder=3)  # fmt: skip
+            ax.plot(xs, [increase(np.concatenate(list(lin_same[lid].values())), output) for _, lid in pts], "-",
+                    color=COLOUR[output], linewidth=2, label="linearised, same GNSS draws")  # fmt: skip
+            if all(lid in lin_many for _, lid in pts):
+                ax.plot(xs, [increase(np.concatenate(list(lin_many[lid].values())), output) for _, lid in pts], ":",
+                        color=COLOUR[output], linewidth=2, label="linearised, all realisations")  # fmt: skip
+            _xscale(ax, xs)
+            ax.set_title(f"{name}, all cases", color=INK, fontsize=10, loc="left")
+            ax.set_xlabel(f"{sw['label']} ({sw.get('unit', '')})", color=INK_2, fontsize=9)
+            ax.set_ylabel("RMSE increase over true trajectory (%)", color=INK_2, fontsize=9)
+            ax.legend(fontsize=8.5, frameon=False, labelcolor=INK_2)
+    ax = axes[2]
+    _style(ax)
+    for output, name in OUTPUTS:
+        pts = [(r[f"full_{output}"], r[f"linear_{output}"]) for r in rows if r["case"] != POOLED]
+        ax.scatter(
+            *zip(*pts, strict=True), s=14, color=COLOUR[output], alpha=0.75, label=f"{name}, each case and level"
+        )
+    lim = max(max(r["full_vel"], r["linear_vel"], r["full_pos"], r["linear_pos"]) for r in rows) * 1.05
+    ax.plot([-2, lim], [-2, lim], color=INK_2, linewidth=1)
+    ax.set_xlim(-2, lim)
+    ax.set_ylim(-2, lim)
+    ax.set_xlabel("full GD solves (%)", color=INK_2, fontsize=9)
+    ax.set_ylabel("linearised, same GNSS draws (%)", color=INK_2, fontsize=9)
+    ax.set_title("Every case and level", color=INK, fontsize=10, loc="left")
+    ax.legend(fontsize=8.5, frameon=False, labelcolor=INK_2)
+    fig.suptitle("Does the linearised GD response reproduce the full solves?", color=INK, fontsize=12.5, x=0.01,
+                 ha="left")  # fmt: skip
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    _save(fig, path)
+    return rows
+
+
+SPOT_FIELDS = [
+    "sweep", "direction", "output", "value", "case", "full_pct", "full_lo", "full_hi", "linear_pct", "threshold_pct",
+]  # fmt: skip
+
+
+def write_spot_markdown(path: str, spots: list[dict]) -> None:
+    if not spots:
+        return
+    lines = ["", "## Spot checks: full GD solves at each +10% threshold", "",
+             "Full solves (5 seeds x 4 realisations) in the binding case at the threshold the linearised method found, "
+             "against the linearised prediction from the same GNSS draws. Should read about +10%.", "",
+             "| Parameter | Direction | Output | Value | Case | Full solves | Linearised |", "|---|---|---|---|---|---|---|"]  # fmt: skip
+    for r in spots:
+        lines.append(
+            f"| {r['sweep']} | {r['direction']} | {r['output']} | {r['value']:.3g} | {r['case']} | "
+            f"{r['full_pct']:+.1f}% [{r['full_lo']:+.1f}, {r['full_hi']:+.1f}] | {r['linear_pct']:+.1f}% |"
+        )
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def build(out: str, exp: dict) -> list[dict]:
-    complete, keys = collect(out, exp)
-    if not complete:
-        print("No complete level on disk yet")
-        return []
-    screening = read_screening(os.path.join(out, "screening.csv"))
+    if exp.get("method") == "linear":
+        return build_linear(out, exp)
+    return build_full(out, exp)
+
+
+def _report(out: str, exp: dict, complete: dict, keys: dict, screening: dict) -> list[dict]:
     lrows = level_rows(complete, keys, screening)
     _write_csv(os.path.join(out, "levels.csv"), lrows, LEVEL_FIELDS)
     by_level = {(r["level"], r["case"]): r for r in lrows}
@@ -441,6 +545,36 @@ def build(out: str, exp: dict) -> list[dict]:
     plot_curves(os.path.join(out, "sensitivity_curves.png"), exp, by_level)
     plot_consistency(os.path.join(out, "consistency.png"), exp, by_level)
     plot_grid(os.path.join(out, "grid.png"), exp, by_level)
+    return rows
+
+
+def build_linear(out: str, exp: dict) -> list[dict]:
+    path = os.path.join(out, "linear_runs.csv")
+    if not os.path.exists(path):
+        print("No linear predictions yet")
+        return []
+    complete, keys, screening = collect_linear(path)
+    rows = _report(out, exp, complete, keys, screening)
+    full, fkeys = collect(out, exp)
+    same, _, _ = collect_linear(path, max_real=exp.get("realisations", 4))
+    val = plot_validation(os.path.join(out, "validation.png"), exp, full, same, complete, fkeys) if full else []
+    _write_csv(os.path.join(out, "validation.csv"), val, ["level", "case", "full_vel", "linear_vel", "full_pos",
+                                                           "linear_pos"])  # fmt: skip
+    spot_path = os.path.join(out, "spot_checks.csv")
+    if os.path.exists(spot_path):
+        with open(spot_path, encoding="utf-8") as f:
+            spots = [{k: (float(v) if k in ("value", "full_pct", "full_lo", "full_hi", "linear_pct") else v)
+                      for k, v in r.items()} for r in csv.DictReader(f)]  # fmt: skip
+        write_spot_markdown(os.path.join(out, "sensitivity_table.md"), spots)
+    return rows
+
+
+def build_full(out: str, exp: dict) -> list[dict]:
+    complete, keys = collect(out, exp)
+    if not complete:
+        print("No complete level on disk yet")
+        return []
+    rows = _report(out, exp, complete, keys, read_screening(os.path.join(out, "screening.csv")))
     found, _, _ = gnss_mc.levels(exp)
     print(f"{len(complete)}/{len(found)} levels complete")
     return rows

@@ -276,7 +276,11 @@ def _solve_doppler_compensated(meas: list[dict], moved: list[dict], pose: dict, 
 
 
 def solve_run(
-    run_dir: str, solver_cfg: dict | None = None, receiver: str = "stationary", pose_estimate: dict | None = None
+    run_dir: str,
+    solver_cfg: dict | None = None,
+    receiver: str = "stationary",
+    pose_estimate: dict | None = None,
+    from_t_s: float | None = None,
 ) -> list[dict]:
     """Solve every tick of a recording.
 
@@ -301,6 +305,9 @@ def solve_run(
     estimate.  The receiver offset, bias and true receiver Doppler columns
     still describe the truth, and each row adds ``rx_pos_err_m`` and
     ``rx_vel_err_ms``, the estimate's horizontal error.
+
+    ``from_t_s`` skips the ticks before that time (each tick is solved on its
+    own, so the rest are unchanged).
     """
     if receiver not in RECEIVER_MODES:
         raise ValueError(f"unknown receiver mode {receiver!r}")
@@ -320,6 +327,8 @@ def solve_run(
 
     rows = []
     for t_ms in sorted(by_t):
+        if from_t_s is not None and (t_ms - t_first) / 1000.0 + 1.0 < from_t_s - 1e-6:
+            continue
         st = truth.get(t_ms)
         meas, adsb = [], None
         for fr in by_t[t_ms]:

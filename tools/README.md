@@ -352,7 +352,7 @@ cd "$root\libs\retina-simulation"
 ..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\receiver_gnss_mc.json --out "C:\radar-runs\receiver-gnss-mc\$(Get-Date -Format yyyy-MM-dd_HHmmss)"
 ```
 
-63 levels, about 6,300 GD solves: roughly 10 hours on 4 cores. Finished
+46 levels, about 3,500 GD solves (warm-up ticks skipped; 2 realisations per seed in the three cases that barely move, `case_realisations`): roughly 5 hours on 4 cores. Finished
 solves are kept, so an interrupted run continues where it stopped when started
 again with the same `--out`. `--reanalyze <folder>` rebuilds the table and
 figures from whatever levels are complete. Output:

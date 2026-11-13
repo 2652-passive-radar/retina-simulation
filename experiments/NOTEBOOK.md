@@ -820,6 +820,57 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
   because seconds within a run are correlated (tau 60 s).
 - Worst case: the motion case whose crossing is nearest nominal.
 
+### Condensing the run (2026-11-13)
+- First launch: 63 levels x 100 solves = 6,325 GD solves, ~12 h on the
+  container's 4 cores (~23 s of one core per solve). The container also
+  suspends when the session is idle, which killed the run once (resumed from
+  disk, nothing lost).
+- **Tried: linearising GD's response** (`tools/gnss_linear.py`).
+  - Idea: GD solves each tick on its own, and the receiver pose error is small
+    against the geometry, so per tick a(delta) ~ a(0) + J delta, with a the
+    aircraft error [e, n, ve, vn], delta the receiver pose error (3 pos + 3
+    vel), J (4 x 6) from 12 central-difference solves per recording
+    (+-2 m, +-0.5 m/s). Any level would then cost one KF run per realisation.
+  - Validated against the full solves of the sigma_white sweep (0.1-32 m),
+    same GNSS draws, all 25 recordings:
+
+    | sigma_white | Velocity increase, full / linear (all cases) | oscillate-vehicle | Position, full / linear |
+    |---|---|---|---|
+    | 0.5 (nominal) | 1.3 / 1.7% | 3.9 / 5.5% | 0.3 / 0.0% |
+    | 2 m | 3.2 / 4.6% | 10.6 / 16.0% | 0.2 / 0.0% |
+    | 8 m | 10.5 / 15.2% | 35.1 / 51.1% | 1.0 / 0.3% |
+    | 32 m | 35.8 / 50.2% | 109.5 / 148.8% | 10.0 / 5.1% |
+
+  - **Rejected.** Two reasons:
+    - Velocity: linear overstates the increase by ~1.5x in the vehicle cases.
+      GD's response is sub-linear at the receiver errors that matter (KF
+      velocity errors of 1-4 m/s, i.e. Doppler correction errors of 1-4 Hz
+      against 2 Hz measurement noise): the solver's Huber loss caps the
+      influence of large Doppler residuals, so a slope measured at 0.5 m/s
+      over-predicts at 2-4 m/s. That would bias thresholds ~20% low.
+    - Position: ~1.3% of ticks (40 of 3,069) change their winning altitude
+      layer under a 2 m receiver shift (near-ties between two layers), and
+      at large errors different ticks flip run to run. A flip moves the
+      aircraft ~80 m, so these few ticks carry most of the position increase
+      and no per-tick linear model can follow them. On ticks that don't flip,
+      linear matched the full solves closely (static, sigma_white 32: sum of
+      squared position change -13,093 full vs -13,265 linear).
+- **Used instead: the same full solves, fewer of them.** Per-level results
+  are identical to the original plan; only what is solved changes:
+  - Levels on the benign side of nominal dropped where stage A showed the
+    receiver error falling (sigma_corr 0.25/0.5, tau 120/1000, rate 2/5 Hz,
+    time offset 0.05 s, latency 0.1 s, sigma_a x2, assumed sigma x0.5,
+    assumed tau x3/x10). Those directions could not cross a threshold, so the
+    table loses only "never crosses" rows.
+  - Grid reduced to sigma_corr {1.5, 6, 24} m x tau {15, 60, 300} s.
+  - Warm-up ticks (< 30 s) not solved: each tick is solved on its own, so the
+    rest are unchanged (checked: 271 of 271 rows identical).
+  - 2 realisations per seed (10 runs) instead of 4 in static, oscillate-walk
+    and linear-east-vehicle, where the increase stays below ~2% even at
+    sigma_white 8 m. 4 per seed (20 runs) in oscillate-vehicle and
+    circle-vehicle, which set every threshold so far.
+  - 46 levels, 2,590 solves left after the sigma_white sweep: ~4.5 h.
+
 ### Results
 - (running)
 

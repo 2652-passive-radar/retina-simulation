@@ -102,6 +102,11 @@ def levels(exp: dict) -> tuple[dict[str, dict], dict[str, list[tuple[float, str]
     return found, sweeps, grid
 
 
+def realisations_for(exp: dict, case: dict) -> int:
+    """GNSS realisations per seed in one case (``case_realisations`` overrides ``realisations``)."""
+    return exp.get("case_realisations", {}).get(case["id"], exp.get("realisations", 1))
+
+
 def solve_file(level: str, realisation: int | None) -> str:
     if level == "truth":
         return gnss_pose.solve_name("truth", None)
@@ -125,7 +130,7 @@ def tasks_for(exp: dict, out: str) -> list[tuple]:
     tasks = [(p, c, s, "truth", None, None) for p, c, s in recs]
     for lid, ov in found.items():
         for p, c, s in recs:
-            for r in range(exp.get("realisations", 1)):
+            for r in range(realisations_for(exp, c)):
                 tasks.append((p, c, s, lid, r, ov))
     return [t for t in tasks if not os.path.exists(os.path.join(t[0], "analysis", solve_file(t[3], t[4])))]
 
@@ -133,7 +138,8 @@ def tasks_for(exp: dict, out: str) -> list[tuple]:
 def _solve(task: tuple, exp: dict) -> str:
     path, case, seed, lid, r, ov = task
     poses = None if lid == "truth" else gnss_pose.poses_for(path, apply(exp, ov), case, seed, r, "kf")
-    rows = offline_solve.solve_run(path, exp.get("solver"), "geometric_doppler", pose_estimate=poses)
+    start = None if lid == "truth" else exp.get("steady_state_from_s")
+    rows = offline_solve.solve_run(path, exp.get("solver"), "geometric_doppler", pose_estimate=poses, from_t_s=start)
     name = solve_file(lid, r)
     tmp = offline_solve.write_rows(path, rows, name + ".part")
     os.replace(tmp, os.path.join(path, "analysis", name))
@@ -277,6 +283,7 @@ def run(exp: dict, args, repo: str, commit) -> None:
         "algorithm": "geometric_doppler",
         "pose_source": "kf",
         "realisations": exp.get("realisations", 1),
+        "case_realisations": exp.get("case_realisations", {}),
         "screen_realisations": exp.get("screen_realisations", 8),
         "gnss_nominal": exp["gnss"],
         "filter_nominal": exp["filter"],
@@ -290,7 +297,16 @@ def run(exp: dict, args, repo: str, commit) -> None:
     }
     with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
-    screen(exp, out, args.jobs)
-    solve_all(exp, out, args.jobs)
-    gnss_mc_report.build(out, exp)
+    if exp.get("method") == "linear":
+        import gnss_linear
+
+        gnss_linear.solve_jacobians(exp, out, args.jobs)
+        gnss_linear.predict_all(exp, out, args.jobs)
+        rows = gnss_mc_report.build(out, exp)
+        gnss_linear.spot_check(exp, out, rows, args.jobs)
+        gnss_mc_report.build(out, exp)
+    else:
+        screen(exp, out, args.jobs)
+        solve_all(exp, out, args.jobs)
+        gnss_mc_report.build(out, exp)
     print(f"\nWrote {out} ({(time.monotonic() - t0) / 3600:.1f} h in all)")
