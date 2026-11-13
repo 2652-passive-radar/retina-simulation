@@ -751,9 +751,22 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
    correction error adds in quadrature to the measurement noise, and the
    0.58 m/s figure assumed the worst geometry on every channel at once.
 
+### Measured velocity tolerance (`velocity_tolerance.png`)
+- Every GNSS- and KF-based solve after 30 s, binned by the receiver velocity
+  error GD was given (0.1 m/s bins, at least 100 solves each).
+- GD's Doppler correction error grows linearly, about 0.95 Hz per m/s of
+  receiver velocity error, and reaches the 2 Hz measurement noise at about
+  2.1 m/s.
+- Aircraft velocity RMSE stays at the truth-fed level (3.6-3.9 m/s against
+  3.62) up to about 1.7 m/s of receiver velocity error, rises to about
+  4.0-4.3 m/s at 1.8-2.1 m/s and is noisy beyond (few solves).
+- So the practical tolerance is about 1.5 m/s of receiver velocity error, not
+  the 0.58 m/s worst-case estimate. The KF stays below that in every case
+  (worst bin about 1.5 m/s, in the turning vehicle cases).
+- Caveat: bins mix motion cases with different geometry; the largest receiver
+  errors come almost entirely from raw GNSS and the turning vehicle cases. The
+  lowest raw-GNSS bins (2.9-3.2 m/s) are few solves and partly that mix.
+
 ### Next (not started)
-- Suggested extra figures: aircraft velocity error against receiver velocity
-  error (measured tolerance), and the increase over the truth-fed result per
-  case.
 - 3d: Monte Carlo over the GNSS parameters, with ranges wide enough to find
   where GD starts to degrade.

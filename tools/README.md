@@ -333,5 +333,6 @@ About 400 GD solves (roughly 40 minutes on 4 cores; `--jobs` as before).
 | File | Holds |
 |---|---|
 | `rmse.png` | aircraft position and velocity RMSE per motion case and over all cases, one bar per source; whiskers span the single-run RMSEs |
+| `velocity_tolerance.png` | aircraft velocity RMSE and GD's Doppler correction error against the receiver velocity error GD was given (all GNSS- and KF-based solves, binned): the measured tolerance |
 | `summary.csv` | per case and source: aircraft RMSE (from 30 s and over the whole run), the spread over runs, the receiver pose error GD was given, the RMS error of GD's Doppler correction |
 | `cases\<case>\doppler-on\seed-<n>\analysis\offline_solves_gd_<source>[_r<k>].csv` | every solve, with `rx_pos_err_m` and `rx_vel_err_ms` for the estimated sources |
