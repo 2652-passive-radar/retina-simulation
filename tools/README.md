@@ -336,3 +336,33 @@ About 400 GD solves (roughly 40 minutes on 4 cores; `--jobs` as before).
 | `velocity_tolerance.png` | % increase of aircraft velocity RMSE over the truth-fed solve of the same recording and second, against the receiver velocity error GD was given (binned, 90% bootstrap band, +10% crossing marked; top axis in Doppler correction error), and where raw GNSS and the KF sit on that axis |
 | `summary.csv` | per case and source: aircraft RMSE (from 30 s and over the whole run), the spread over runs, the receiver pose error GD was given, the RMS error of GD's Doppler correction |
 | `cases\<case>\doppler-on\seed-<n>\analysis\offline_solves_gd_<source>[_r<k>].csv` | every solve, with `rx_pos_err_m` and `rx_vel_err_ms` for the estimated sources |
+
+## Step 3d: Monte Carlo sensitivity of GD to the GNSS and KF parameters
+
+`experiments/receiver_gnss_mc.json` moves one GNSS-model or receiver-KF
+parameter at a time from nominal (`sweeps`), plus a sigma_corr x tau grid
+(`grid`), and solves 5 motion cases (`case_ids`) with GD and the receiver pose
+from the KF, 5 seeds x 4 GNSS realisations per level. GNSS keys
+(`gnss.<key>`) change the simulated GNSS and what the KF is told (matched);
+filter keys (`filter.sigma_a_scale`, `assumed_sigma_scale`,
+`assumed_tau_scale`) detune the KF from a nominal GNSS.
+
+```
+cd "$root\libs\retina-simulation"
+..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\receiver_gnss_mc.json --out "C:\radar-runs\receiver-gnss-mc\$(Get-Date -Format yyyy-MM-dd_HHmmss)"
+```
+
+63 levels, about 6,300 GD solves: roughly 10 hours on 4 cores. Finished
+solves are kept, so an interrupted run continues where it stopped when started
+again with the same `--out`. `--reanalyze <folder>` rebuilds the table and
+figures from whatever levels are complete. Output:
+
+| File | Holds |
+|---|---|
+| `sensitivity_table.md` / `.csv` | per parameter and direction from nominal: the value at which aircraft position / velocity RMSE first rises +5/10/20% above GD with the true trajectory, in the worst motion case and pooled, with 90% intervals (runs resampled) |
+| `sensitivity_curves.png` | % increase against each swept parameter (all cases with a 90% band, and the worst case) |
+| `consistency.png` | stage A: how often the truth sits inside the KF's own +/-2 sigma, per level (is the KF honest when mistuned?) |
+| `grid.png` | stage C: % increase over sigma_corr x tau |
+| `levels.csv` | per level and case: % increases with intervals, receiver error GD was given, KF coverage and mean NIS |
+| `screening.csv` | stage A: the KF alone, 8 realisations per level, case and seed |
+| `cases\<case>\doppler-on\seed-<n>\analysis\offline_solves_gd_mc_<level>_r<k>.csv` | every solve |

@@ -1,0 +1,31 @@
+{
+  "name": "receiver-gnss-mc",
+  "description": "Step 3d of the receiver-motion study: Monte Carlo sensitivity of GD (receiver pose from the step 3b KF) to each GNSS-model and receiver-KF parameter, one at a time from nominal, plus a sigma_corr x tau grid. GNSS sweeps keep the KF matched to the GNSS; the filter sweeps detune the KF from a nominal GNSS. Output: the value of each parameter at which GD's aircraft position or velocity RMSE rises 5/10/20% above GD with the true trajectory.",
+  "base": "receiver_gnss.json",
+  "case_ids": ["static", "oscillate-walk", "linear-east-vehicle", "oscillate-vehicle", "circle-vehicle"],
+  "realisations": 4,
+  "screen_realisations": 8,
+  "thresholds_pct": [5, 10, 20],
+  "sweeps": [
+    {"id": "sigma_white", "key": "gnss.sigma_white_m", "label": "GNSS white noise σ_white", "unit": "m",
+     "levels": [0.1, 0.25, 1, 2, 4, 8, 16, 32]},
+    {"id": "sigma_corr", "key": "gnss.sigma_corr_m", "label": "GNSS correlated error σ_corr", "unit": "m",
+     "levels": [0.25, 0.5, 3, 6, 12, 24, 48]},
+    {"id": "tau", "key": "gnss.tau_s", "label": "GNSS correlation time τ", "unit": "s",
+     "levels": [5, 15, 30, 120, 300, 1000]},
+    {"id": "rate", "key": "gnss.rate_hz", "label": "GNSS fix rate", "unit": "Hz",
+     "levels": [0.1, 0.2, 0.5, 2, 5, 10]},
+    {"id": "time_offset", "key": "gnss.time_offset_s", "label": "GNSS time offset (unknown to the KF)", "unit": "s",
+     "levels": [0.05, 0.1, 0.2, 0.5, 1, 2]},
+    {"id": "latency", "key": "gnss.latency_s", "label": "GNSS latency (known to the KF)", "unit": "s",
+     "levels": [0.1, 0.25, 0.5, 1, 2, 5]},
+    {"id": "sigma_a", "key": "filter.sigma_a_scale", "label": "KF σ_a (× platform-mode value)", "unit": "×",
+     "levels": [0.1, 0.25, 0.5, 2, 4, 10]},
+    {"id": "assumed_sigma", "key": "filter.assumed_sigma_scale", "label": "KF assumed σ_white, σ_corr (× true)", "unit": "×",
+     "levels": [0.25, 0.5, 2, 4]},
+    {"id": "assumed_tau", "key": "filter.assumed_tau_scale", "label": "KF assumed τ (× true)", "unit": "×",
+     "levels": [0.1, 0.3, 3, 10]}
+  ],
+  "grid": {"x": "gnss.sigma_corr_m", "y": "gnss.tau_s", "x_label": "σ_corr (m)", "y_label": "τ (s)",
+           "x_levels": [0.5, 1.5, 6, 24], "y_levels": [15, 60, 300, 1000]}
+}

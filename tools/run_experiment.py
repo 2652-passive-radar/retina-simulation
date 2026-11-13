@@ -6,6 +6,7 @@ retina_geolocator; matplotlib and shapely must be installed in it too)::
     python tools/run_experiment.py experiments/baseline_static.json
     python tools/run_experiment.py experiments/receiver_motion.json      # step 1 (see motion_experiment.py)
     python tools/run_experiment.py experiments/receiver_gnss.json        # step 3c (see gnss_experiment.py)
+    python tools/run_experiment.py experiments/receiver_gnss_mc.json     # step 3d (see gnss_mc.py)
     python tools/run_experiment.py experiments/baseline_static.json --system --backend-dir ../../backend
 
 Default (about a minute): records each seed without a server, solves it
@@ -170,6 +171,11 @@ def main() -> None:
     args = parser.parse_args()
 
     exp = experiment.load(args.experiment)
+    if "sweeps" in exp:
+        import gnss_mc
+
+        gnss_mc.run(exp, args, _REPO, _commit)
+        return
     if "pose_sources" in exp:
         import gnss_experiment
 

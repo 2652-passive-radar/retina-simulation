@@ -53,15 +53,18 @@ class FilterConfig:
 def config_for(exp: dict, case: dict) -> FilterConfig:
     """The filter for one motion case: acceleration noise and initial velocity
     uncertainty from the case's platform mode, GNSS error parameters matched to
-    the experiment's GNSS model."""
+    the experiment's GNSS model.  Optional ``filter`` keys scale them away from
+    the truth (step 3d's tuning-mismatch sweeps): ``sigma_a_scale``,
+    ``assumed_sigma_scale`` (sigma_white and sigma_corr) and ``assumed_tau_scale``."""
     mode = exp["filter"]["modes"][case.get("speed", "none")]
     g = exp["gnss"]
+    scale = exp["filter"].get
     return FilterConfig(
-        sigma_a=mode["sigma_a"],
+        sigma_a=mode["sigma_a"] * scale("sigma_a_scale", 1.0),
         sigma_v0=mode["sigma_v0"],
-        sigma_white=g["sigma_white_m"],
-        sigma_corr=g["sigma_corr_m"],
-        tau_s=g["tau_s"],
+        sigma_white=g["sigma_white_m"] * scale("assumed_sigma_scale", 1.0),
+        sigma_corr=g["sigma_corr_m"] * scale("assumed_sigma_scale", 1.0),
+        tau_s=g["tau_s"] * scale("assumed_tau_scale", 1.0),
     )
 
 

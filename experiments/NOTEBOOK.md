@@ -771,6 +771,58 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
 - Caveat: the +10% threshold is a choice, not a requirement; 3d should report
   several (5/10/20%).
 
+## Step 3d: Monte Carlo sensitivity to the GNSS and KF parameters (2026-11-13)
+
+### Goal
+- For each parameter of the GNSS error model and the receiver KF: the value
+  at which GD's aircraft position or velocity RMSE (receiver pose from the KF)
+  rises more than +5/10/20% above GD with the true trajectory.
+- Intended use: a GNSS hardware and KF tuning requirement for the moving
+  receiver.
+
+### Decisions (approved 2026-11-13)
+- One parameter at a time from nominal, every other parameter nominal.
+- GNSS sweeps: the KF is told the true GNSS parameters (matched): "how good
+  must the GNSS be". Filter sweeps: the KF's sigma_a, assumed sigma_white /
+  sigma_corr and assumed tau scaled away from the truth with the GNSS nominal:
+  "how wrong can the tuning be".
+- The mismatch is also recorded as a metric: how often the truth sits inside
+  the KF's own +-2 sigma (and its mean NIS) at every level (stage A).
+- Position-only GNSS (no GNSS-reported velocity for now).
+- KF only (no raw GNSS), 5 cases: static, oscillate-walk,
+  linear-east-vehicle, oscillate-vehicle, circle-vehicle.
+- 5 seeds x 4 realisations per case per level (20 runs per case, 100 per
+  level). Stage C (sigma_corr x tau grid) included.
+- sigma_v0 left out: it only matters during the warm-up, which the metric
+  excludes.
+
+### Levels (nominal in the middle)
+- sigma_white 0.1-32 m (0.5); sigma_corr 0.25-48 m (1.5); tau 5-1000 s (60);
+  fix rate 0.1-10 Hz (1); time offset 0-2 s (0); latency 0-5 s (0).
+- KF sigma_a x0.1-x10; assumed sigma_white and sigma_corr x0.25-x4; assumed
+  tau x0.1-x10.
+- Grid: sigma_corr {0.5, 1.5, 6, 24} m x tau {15, 60, 300, 1000} s.
+- 63 distinct levels, 6,300 GD solves, about 10 h on 4 cores.
+
+### Method
+- Metric per level: each KF-fed solve after 30 s paired with the truth-fed
+  solve of the same recording and second;
+  % increase = 100 (sqrt(sum e_kf^2 / sum e_truth^2) - 1), for horizontal
+  position and velocity, per case and pooled.
+- Threshold: walking outward from nominal in each direction, the first value
+  where the curve reaches the threshold, interpolated linearly in log(value)
+  (linear where the sweep includes 0). "Never crosses" = beyond the tested
+  range.
+- Intervals: 1000 bootstrap resamples of whole runs (case, seed,
+  realisation), stratified by case, the same draw for every level (common
+  random numbers: a realisation uses the same underlying GNSS draws at every
+  level). The per-second bootstrap in the 3c tolerance plot is too narrow,
+  because seconds within a run are correlated (tau 60 s).
+- Worst case: the motion case whose crossing is nearest nominal.
+
+### Results
+- (running)
+
 ### Next (not started)
-- 3d: Monte Carlo over the GNSS parameters, with ranges wide enough to find
-  where GD starts to degrade.
+- Possible: GNSS-reported (Doppler) velocity as a KF measurement, H = [[1 0 1],
+  [0 1 0]], sigma_vel ~0.05 m/s (deferred 2026-11-13).
