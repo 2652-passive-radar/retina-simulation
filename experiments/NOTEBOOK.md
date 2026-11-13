@@ -871,8 +871,59 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
     circle-vehicle, which set every threshold so far.
   - 46 levels, 2,590 solves left after the sigma_white sweep: ~4.5 h.
 
-### Results
-- (running)
+### Results (run 2026-11-13, 4.5 h; outputs in the run folder)
+- Nominal: KF-fed GD is +1.7% on aircraft velocity, +0.3% on position over
+  truth-fed (all cases); worst case oscillate-vehicle +3.9% velocity.
+- **Velocity is the binding output** everywhere; position only moves for
+  large GNSS position errors or a time offset.
+- **Sensitivity table, aircraft velocity, worst case (90% interval):**
+
+  | Parameter (nominal) | +5% | +10% | +20% | Pooled +10% |
+  |---|---|---|---|---|
+  | sigma_white (0.5 m) | 0.69 m | **1.82 m** [1.54-2.09] | 4.2 m | 5.1 m |
+  | sigma_corr (1.5 m) | 2.5 m | **5.6 m** [4.8-6.2] | 9.2 m | 10.4 m |
+  | fix rate, lowered (1 Hz) | 0.48 Hz | **0.28 Hz** [0.25-0.31] | 0.17 Hz | 0.15 Hz |
+  | time offset (0 s) | 0.25 s | **1.17 s** [0.98-1.37] | > 2 s | > 2 s |
+  | latency (0 s) | 0.34 s | **1.21 s** [1.04-1.41] | 2.6 s | 3.2 s |
+  | KF sigma_a, lowered (x1) | x0.78 | **x0.38** [0.34-0.42] | x0.21 | x0.18 |
+  | KF sigma_a, raised | x5.0 | > x10 | > x10 | > x10 |
+  | KF assumed sigma, raised (x1) | x1.29 | **x2.65** [2.40-2.95] | > x4 | > x4 |
+  | KF assumed sigma, lowered | none to x0.25 | | | |
+  | tau, lowered (60 s) | 20 s | none to 5 s | | |
+  | tau raised, KF assumed tau | never | | | |
+
+  The binding case is oscillate-vehicle in every row.
+- **Aircraft position, worst case +10%:** sigma_white 18 m, sigma_corr 17.9 m
+  (circle-vehicle), time offset 1.09 s (linear-east-vehicle: 15 m/s x 1 s is
+  ~15 m of receiver error). Nothing else crosses.
+- Grid (sigma_corr x tau): the velocity effect grows as tau shortens (worst
+  case at sigma_corr 6 m: +24% at tau 15 s, +10.5% at 60 s, +5.4% at 300 s),
+  consistent with velocity error ~ sigma_corr / sqrt(tau). Position depends
+  on sigma_corr only.
+- **KF consistency (the mismatch metric):**
+  - Time offset is the dangerous one. It degrades position coverage to 61% at
+    1 s while NIS stays at 0.95, so the filter cannot see it. It needs fixing
+    at the hardware/timestamp level, not in the filter.
+  - Too-small sigma_a or assumed sigma: coverage drops (62-73%, 41-67%), but
+    NIS rises to 3.6-15, so it is detectable online.
+  - High fix rate (10 Hz): velocity coverage 73%. The filter treats the
+    correlated part as resolved faster than it is; harmless to GD (+2%).
+- **Interpretation (requirement, worst case, +10% velocity, one at a time):**
+  - GNSS white noise below ~1.8 m;
+  - correlated error below ~5.6 m (at tau 60 s; tighter for shorter tau);
+  - at least ~0.3 Hz fixes;
+  - GNSS-to-radar time alignment better than ~1 s (~0.25 s for +5%);
+  - known latency up to ~1.2 s;
+  - KF sigma_a not below ~0.4x the platform value;
+  - KF noise assumptions within ~2.6x.
+  The nominal consumer-grade GNSS sits well inside all of these. The tightest
+  relative margin is the time offset: +5% at 0.25 s.
+- Caveats:
+  - One at a time. Errors combine roughly in quadrature on the receiver
+    velocity error (the grid shows sigma_corr and tau interact), so several
+    parameters near their thresholds at once would cross sooner.
+  - Thresholds are relative to a +-200 Hz Doppler / 2 Hz noise radar and these
+    5 motion cases. The oscillating vehicle (the hardest manoeuvre) binds.
 
 ### Next (not started)
 - Possible: GNSS-reported (Doppler) velocity as a KF measurement, H = [[1 0 1],

@@ -32,6 +32,7 @@ import math
 import os
 
 import matplotlib
+import matplotlib.ticker
 
 matplotlib.use("Agg")
 import gnss_mc  # noqa: E402
@@ -131,7 +132,7 @@ def _ci(vals: list[float | None]) -> tuple[float | None, float | None, float]:
     crosses' (treated as beyond the tested range), and the share that never cross."""
     miss = sum(v is None for v in vals) / len(vals)
     arr = np.array([math.inf if v is None else v for v in vals])
-    lo, hi = np.percentile(arr, CI)
+    lo, hi = np.percentile(arr, CI, method="nearest")
     return (None if math.isinf(lo) else float(lo)), (None if math.isinf(hi) else float(hi)), miss
 
 
@@ -297,6 +298,8 @@ def _xscale(ax, xs):
     pos = [x for x in xs if x > 0]
     if min(xs) > 0:
         ax.set_xscale("log")
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
     elif pos:
         ax.set_xscale("symlog", linthresh=min(pos))
 
