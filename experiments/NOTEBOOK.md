@@ -752,20 +752,24 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
    0.58 m/s figure assumed the worst geometry on every channel at once.
 
 ### Measured velocity tolerance (`velocity_tolerance.png`)
-- Every GNSS- and KF-based solve after 30 s, binned by the receiver velocity
-  error GD was given (0.1 m/s bins, at least 100 solves each).
-- GD's Doppler correction error grows linearly, about 0.95 Hz per m/s of
-  receiver velocity error, and reaches the 2 Hz measurement noise at about
-  2.1 m/s.
-- Aircraft velocity RMSE stays at the truth-fed level (3.6-3.9 m/s against
-  3.62) up to about 1.7 m/s of receiver velocity error, rises to about
-  4.0-4.3 m/s at 1.8-2.1 m/s and is noisy beyond (few solves).
-- So the practical tolerance is about 1.5 m/s of receiver velocity error, not
-  the 0.58 m/s worst-case estimate. The KF stays below that in every case
-  (worst bin about 1.5 m/s, in the turning vehicle cases).
-- Caveat: bins mix motion cases with different geometry; the largest receiver
-  errors come almost entirely from raw GNSS and the turning vehicle cases. The
-  lowest raw-GNSS bins (2.9-3.2 m/s) are few solves and partly that mix.
+- First version pooled unpaired solves across cases: confounded by geometry
+  (cases differ in baseline velocity RMSE) and hard to read. Redrawn as a
+  paired comparison.
+- Paired method: every GNSS- and KF-based solve after 30 s is matched to the
+  truth-fed GD solve of the same recording and second. Per 0.1 m/s bin of
+  receiver velocity error (>= 100 solves): % increase of aircraft velocity
+  RMSE = 100 (sqrt(sum e_est^2 / sum e_truth^2) - 1); 90% bootstrap interval
+  (300 resamples).
+- Result: < 2% up to 1.1 m/s, ~4-6% at 1.2-1.6 m/s, crosses +10% at
+  **1.84 m/s** of receiver velocity error; ~13-20% beyond (few solves, wide
+  intervals).
+- Doppler correction error: least-squares slope 0.91 Hz per m/s (the earlier
+  0.95 was a binned estimate); reaches the 2 Hz measurement noise at ~2.2 m/s.
+- Where each source operates: 95% of KF solves are below 1.21 m/s (inside the
+  tolerated region); 95% of raw GNSS solves below 1.91 m/s (its tail crosses
+  the +10% line).
+- Caveat: the +10% threshold is a choice, not a requirement; 3d should report
+  several (5/10/20%).
 
 ### Next (not started)
 - 3d: Monte Carlo over the GNSS parameters, with ranges wide enough to find

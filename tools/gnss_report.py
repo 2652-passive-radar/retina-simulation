@@ -165,63 +165,138 @@ def plot_rmse(path: str, title: str, summary: list[dict], sources) -> None:
     _save(fig, path)
 
 
-def plot_velocity_tolerance(path: str, rows_by_source: dict, truth_vel: float, noise_hz: float = 2.0) -> None:
-    """Aircraft velocity RMSE and GD correction error against the receiver
-    velocity error, binned over every solve of the estimated sources."""
-    edges = np.arange(0.0, 3.01, 0.1)
-    fig, axes = plt.subplots(1, 2, figsize=(15, 5.6), facecolor=SURFACE)
-    for ax in axes:
-        _style(ax)
-    pooled = [x for rows in rows_by_source.values() for x in rows]
-    series = [(s, rows_by_source[s], SOURCE_COLOUR[s], SOURCE_LABEL[s]) for s in rows_by_source]
-    series.append(("all", pooled, INK, "both sources pooled"))
-    for key, rows, colour, label in series:
-        rx = np.array([x["rx_vel"] for x in rows], dtype=float)
-        vel = np.array([x["vel"] for x in rows], dtype=float)
-        corr = [x["corr_err"] for x in rows]
-        xs, ys, cs, ns = [], [], [], []
-        for lo, hi in zip(edges[:-1], edges[1:]):
-            m = (rx >= lo) & (rx < hi)
-            if m.sum() < 100:
-                continue
-            xs.append(float(rx[m].mean()))
-            ys.append(math.sqrt(float(np.mean(vel[m] ** 2))))
-            errs = [e for i in np.flatnonzero(m) for e in corr[i]]
-            cs.append(math.sqrt(float(np.mean(np.square(errs)))) if errs else float("nan"))
-            ns.append(int(m.sum()))
-        style = {"linestyle": (0, (4, 2)), "linewidth": 2.2, "markersize": 0} if key == "all" else {
-            "linewidth": 1.8, "markersize": 5}  # fmt: skip
-        axes[0].plot(xs, ys, "-o", color=colour, label=label, **style)
-        axes[1].plot(xs, cs, "-o", color=colour, label=label, **style)
-    axes[0].axhline(truth_vel, color=SOURCE_COLOUR["truth"], linewidth=1.2, linestyle=":")
-    axes[0].text(0.98, truth_vel * 0.96, f"true trajectory: {truth_vel:.2f} m/s", transform=axes[0].get_yaxis_transform(),
-                 va="top", ha="right", fontsize=8.5, color=INK_2)  # fmt: skip
-    axes[0].set_ylim(0, None)
-    axes[0].set_xlabel("Receiver velocity error given to GD (m/s, horizontal)", color=INK, fontsize=10)
-    axes[0].set_ylabel("Aircraft velocity RMSE (m/s)", color=INK, fontsize=10)
-    axes[0].set_title("Aircraft velocity error against receiver velocity error", color=INK, fontsize=10.5, loc="left")
-    axes[1].axhline(noise_hz, color=INK, linewidth=1.2, linestyle=(0, (5, 3)))
-    axes[1].text(0.02, noise_hz, f" Doppler measurement noise ({noise_hz:g} Hz)",
-                 transform=axes[1].get_yaxis_transform(), va="bottom", fontsize=8.5, color=INK_2)  # fmt: skip
-    axes[1].set_ylim(0, None)
-    axes[1].set_xlabel("Receiver velocity error given to GD (m/s, horizontal)", color=INK, fontsize=10)
-    axes[1].set_ylabel("RMS error of GD's Doppler correction (Hz)", color=INK, fontsize=10)
-    axes[1].set_title("GD's Doppler correction error, per channel", color=INK, fontsize=10.5, loc="left")
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(0.01, 0.94), ncol=3, fontsize=9.5, frameon=False,
-               labelcolor=INK_2)  # fmt: skip
-    fig.suptitle("How much receiver velocity error GD tolerates", color=INK, fontsize=12.5, x=0.01, ha="left")
+def paired_rows(out: str, exp: dict, t0: float) -> dict[str, dict[str, np.ndarray]]:
+    """For each estimated pose source, every solve after the warm-up paired with
+    the truth-fed solve of the same recording and tick: the receiver velocity
+    error, the aircraft velocity error with the estimate and with the truth, and
+    the RMS of GD's Doppler correction error over the channels."""
+    out_by = {}
+    for source in exp["pose_sources"]:
+        if source == "truth":
+            continue
+        rx, est, tru, corr = [], [], [], []
+        for case in exp["cases"]:
+            for doppler in dopplers_for(exp, case):
+                for run in exp["runs"]:
+                    d = os.path.join(seed_dir(out, case["id"], doppler, run["seed"]), "analysis")
+                    truth = {x["t_s"]: x["vel"] for x in load(os.path.join(d, solve_name("truth", None)))}
+                    for r in range(exp.get("realisations", 1)):
+                        for x in load(os.path.join(d, solve_name(source, r))):
+                            if x["t_s"] < t0 or x["rx_vel"] is None or x["vel"] is None:
+                                continue
+                            if truth.get(x["t_s"]) is None:
+                                continue
+                            rx.append(x["rx_vel"])
+                            est.append(x["vel"])
+                            tru.append(truth[x["t_s"]])
+                            corr.append(_rms(x["corr_err"]) if x["corr_err"] else np.nan)
+        out_by[source] = {
+            k: np.array(v, dtype=float) for k, v in (("rx", rx), ("est", est), ("tru", tru), ("corr", corr))
+        }
+    return out_by
+
+
+def tolerance_curve(rx, est, tru, edges, min_n=100, n_boot=300, seed=0):
+    """Per receiver-velocity-error bin: centre, % increase of aircraft velocity RMSE
+    over the truth-fed RMSE at the same ticks, and a 90 % bootstrap interval."""
+    rng = np.random.default_rng(seed)
+    xs, inc, lo, hi = [], [], [], []
+    for a, b in zip(edges[:-1], edges[1:]):
+        m = np.flatnonzero((rx >= a) & (rx < b))
+        if len(m) < min_n:
+            continue
+        e2, t2 = est[m] ** 2, tru[m] ** 2
+        xs.append(float(rx[m].mean()))
+        inc.append(100 * (math.sqrt(e2.mean() / t2.mean()) - 1))
+        k = rng.integers(0, len(m), size=(n_boot, len(m)))
+        boot = 100 * (np.sqrt(e2[k].mean(axis=1) / t2[k].mean(axis=1)) - 1)
+        lo.append(float(np.percentile(boot, 5)))
+        hi.append(float(np.percentile(boot, 95)))
+    return np.array(xs), np.array(inc), np.array(lo), np.array(hi)
+
+
+def first_crossing(xs, ys, level):
+    """Receiver error where the curve first rises through ``level`` (linear interpolation)."""
+    for i in range(1, len(xs)):
+        if ys[i - 1] < level <= ys[i]:
+            return float(xs[i - 1] + (level - ys[i - 1]) * (xs[i] - xs[i - 1]) / (ys[i] - ys[i - 1]))
+    return None
+
+
+def plot_velocity_tolerance(path: str, paired: dict, threshold_pct: float = 10.0, noise_hz: float = 2.0) -> dict:
+    """How much receiver velocity error GD tolerates, as % increase of the aircraft
+    velocity RMSE over the truth-fed RMSE at the same ticks."""
+    edges = np.arange(0.0, 2.81, 0.1)
+    rx = np.concatenate([v["rx"] for v in paired.values()])
+    est = np.concatenate([v["est"] for v in paired.values()])
+    tru = np.concatenate([v["tru"] for v in paired.values()])
+    corr = np.concatenate([v["corr"] for v in paired.values()])
+    xs, inc, lo, hi = tolerance_curve(rx, est, tru, edges)
+    ok = np.isfinite(corr)
+    hz_per_ms = float(np.sum(rx[ok] * corr[ok]) / np.sum(rx[ok] ** 2))
+    limit = first_crossing(xs, inc, threshold_pct)
+    x_max = float(edges[-1])
+
+    fig, (ax, bx) = plt.subplots(2, 1, figsize=(12, 8.2), sharex=True, facecolor=SURFACE,
+                                 gridspec_kw={"height_ratios": [2.4, 1]})  # fmt: skip
+    _style(ax)
+    _style(bx)
+    if limit is not None:
+        ax.axvspan(0, limit, color="#dff2e7", zorder=0)
+        ax.text(limit / 2, 0.97, "tolerated", transform=ax.get_xaxis_transform(), ha="center", va="top",
+                fontsize=11, color="#1b7a52", fontweight="bold")  # fmt: skip
+        ax.axvline(limit, color="#1b7a52", linewidth=1.5)
+        ax.text(limit, 0.86, f"  +{threshold_pct:g}% at {limit:.2f} m/s", transform=ax.get_xaxis_transform(),
+                fontsize=10, color="#1b7a52", fontweight="bold")  # fmt: skip
+    ax.fill_between(xs, lo, hi, color=INK, alpha=0.12, linewidth=0, label="90% interval (bootstrap)")
+    ax.plot(xs, inc, "-o", color=INK, linewidth=2.2, markersize=4.5, label="raw GNSS and KF solves pooled")
+    ax.axhline(0, color=INK_2, linewidth=0.9)
+    ax.axhline(threshold_pct, color="#c0392b", linewidth=1.2, linestyle=(0, (5, 3)))
+    ax.text(x_max, threshold_pct, f"+{threshold_pct:g}% threshold ", ha="right", va="bottom", fontsize=9,
+            color="#c0392b")  # fmt: skip
+    x_noise = noise_hz / hz_per_ms
+    ax.axvline(x_noise, color=INK_2, linewidth=1, linestyle=":")
+    ax.text(x_noise, 0.02, f" correction error = radar's {noise_hz:g} Hz Doppler noise", rotation=90,
+            transform=ax.get_xaxis_transform(), va="bottom", ha="right", fontsize=8.5, color=INK_2)  # fmt: skip
+    ax.set_ylabel("Aircraft velocity RMSE increase\nover true-trajectory GD (%)", color=INK, fontsize=10)
+    ax.set_ylim(min(-5.0, float(np.min(lo)) - 2), max(threshold_pct * 2.5, float(np.max(hi)) + 5))
+    ax.legend(loc="upper left", bbox_to_anchor=(0.0, 0.8), fontsize=9, frameon=False, labelcolor=INK_2)
+    top = ax.secondary_xaxis("top", functions=(lambda v: v * hz_per_ms, lambda v: v / hz_per_ms))
+    top.set_xlabel(f"GD's Doppler correction error per channel (Hz, RMS; about {hz_per_ms:.2f} Hz per m/s)",
+                   color=INK_2, fontsize=9)  # fmt: skip
+    top.tick_params(colors=INK_2, labelsize=8.5)
+
+    width = 0.05
+    for source, v in paired.items():
+        h, _ = np.histogram(v["rx"], bins=np.arange(0, x_max + width, width))
+        frac = 100 * h / max(len(v["rx"]), 1)
+        bx.step(np.arange(0, x_max, width) + width / 2, frac, where="mid", color=SOURCE_COLOUR[source], linewidth=1.8,
+                label=SOURCE_LABEL[source])  # fmt: skip
+        p95 = float(np.percentile(v["rx"], 95))
+        bx.axvline(p95, color=SOURCE_COLOUR[source], linewidth=1.2, linestyle=(0, (4, 2)))
+        bx.text(p95, 0.95, f" 95% below {p95:.2f}", transform=bx.get_xaxis_transform(), va="top", fontsize=8.5,
+                color=SOURCE_COLOUR[source])  # fmt: skip
+    if limit is not None:
+        bx.axvspan(0, limit, color="#dff2e7", zorder=0)
+    bx.set_ylabel("Share of solves (%)", color=INK, fontsize=10)
+    bx.set_xlabel("Receiver velocity error given to GD (m/s, horizontal)", color=INK, fontsize=10)
+    bx.set_xlim(0, x_max)
+    bx.set_ylim(0, None)
+    bx.legend(loc="upper right", fontsize=9, frameon=False, labelcolor=INK_2)
+    bx.set_title("Where each receiver-trajectory source actually operates", color=INK, fontsize=10, loc="left")
+    fig.suptitle("How much receiver velocity error GD tolerates before aircraft velocity accuracy degrades",
+                 color=INK, fontsize=12.5, x=0.01, ha="left")  # fmt: skip
     fig.text(
         0.01,
         0.005,
-        "Every solve after the warm-up, all motion cases, binned by the instantaneous receiver velocity error "
-        "(0.1 m/s bins with at least 100 solves). Cases differ in geometry, so large receiver errors come mostly "
-        "from the turning vehicle cases.",
+        "Each solve compared with the true-trajectory solve of the same recording and second; binned by receiver "
+        "velocity error (0.1 m/s bins, at least 100 solves); every motion case, after the warm-up.",
         color=INK_2,
         fontsize=8.5,
     )
-    fig.tight_layout(rect=(0, 0.03, 1, 0.9))
+    fig.tight_layout(rect=(0, 0.02, 1, 0.97))
     _save(fig, path)
+    return {"tolerance_ms": limit, "hz_per_ms": hz_per_ms, "noise_crossing_ms": x_noise}
 
 
 def build(out: str, exp: dict) -> list[dict]:
@@ -235,14 +310,10 @@ def build(out: str, exp: dict) -> list[dict]:
             summary.append(stats(case["id"], s, runs, t0))
     for s in sources:
         summary.append(stats("all cases", s, pooled[s], t0))
-    estimated = {
-        s: [x for run in pooled[s] for x in run if x["t_s"] >= t0 and x["rx_vel"] is not None]
-        for s in sources
-        if s != "truth"
-    }
-    truth_all = next((r for r in summary if r["case"] == "all cases" and r["source"] == "truth"), None)
-    if estimated and truth_all:
-        plot_velocity_tolerance(os.path.join(out, "velocity_tolerance.png"), estimated, truth_all["vel_rmse_ms"])
+    if "truth" in sources and len(sources) > 1:
+        tol = plot_velocity_tolerance(os.path.join(out, "velocity_tolerance.png"), paired_rows(out, exp, t0))
+        if tol["tolerance_ms"] is not None:
+            print(f"Receiver velocity tolerance (+10% aircraft velocity RMSE): {tol['tolerance_ms']:.2f} m/s")
 
     with open(os.path.join(out, "summary.csv"), "w", newline="", encoding="utf-8") as f:
         wr = csv.DictWriter(f, fieldnames=FIELDS)
