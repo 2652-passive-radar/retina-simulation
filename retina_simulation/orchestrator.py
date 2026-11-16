@@ -43,6 +43,7 @@ from retina_simulation.live_adsb import LiveAdsbClient
 from retina_simulation.micro_doppler import AIRFRAMES
 from retina_simulation.tower_resolver import apply_tower_assignments, resolve_towers
 from retina_simulation.world import (
+    SNR_MODELS,
     MetroCell,
     NodeConfig,
     SimulationWorld,
@@ -1271,6 +1272,14 @@ def _resolve_micro_doppler(args) -> tuple[bool, float, dict[str, float] | None]:
     return enabled, cpi, mix
 
 
+def _resolve_snr_model(args) -> str:
+    """--snr-model wins; SIM_SNR_MODEL is the fallback so a container can set it without editing its command."""
+    model = getattr(args, "snr_model", None) or os.environ.get("SIM_SNR_MODEL", "").strip().lower() or "legacy"
+    if model not in SNR_MODELS:
+        raise ValueError(f"unknown SNR model {model!r} (choose from {', '.join(SNR_MODELS)})")
+    return model
+
+
 async def main_async(args):
     """Main async entry point."""
     # Load or generate fleet config
@@ -1386,6 +1395,9 @@ async def main_async(args):
         orchestrator.world.airframe_mix = md_mix
     if md_enabled or md_mix is not None:
         log.info("Micro-Doppler: enabled=%s cpi=%.2fs airframe_mix=%s", md_enabled, md_cpi_s, md_mix or "jet only")
+    orchestrator.world.snr_model = _resolve_snr_model(args)
+    if orchestrator.world.snr_model != "legacy":
+        log.info("SNR model: %s", orchestrator.world.snr_model)
 
     # Handle graceful shutdown
     loop = asyncio.get_event_loop()
@@ -1651,9 +1663,17 @@ def main():
         help='Airframe fractions of non-drone aircraft, e.g. "jet:0.5,turboprop:0.2,piston:0.2,helicopter:0.1" '
         "(normalised). Falls back to $SIM_AIRFRAME_MIX; default all jets.",
     )
+    parser.add_argument(
+        "--snr-model",
+        choices=SNR_MODELS,
+        default=None,
+        help="Detection SNR model: legacy (range only, the default) or radar (bistatic radar equation with a "
+        "per-airframe RCS). Falls back to $SIM_SNR_MODEL.",
+    )
     args = parser.parse_args()
     try:
         _resolve_micro_doppler(args)
+        _resolve_snr_model(args)
     except ValueError as e:
         parser.error(str(e))
 

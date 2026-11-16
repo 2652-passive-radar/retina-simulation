@@ -232,6 +232,18 @@ class SimulatedAircraft:
     # for airframes with rotors so two identical aircraft do not share a comb.
     rotor_phases: list = field(default_factory=list)
     rpm_scale: float = 1.0
+    # Scheduled flight behaviour for the non-jet airframes: "hover" (helicopter) or
+    # "orbit" (piston), None for everything else.  The per-aircraft draws are made
+    # once at spawn; maneuver_param is the hover speed (km/s) or the signed orbit
+    # turn rate (deg/s).  maneuver_phase is "cruise" between maneuvers.
+    maneuver_kind: str | None = None
+    maneuver_gap_s: float = 0.0
+    maneuver_hold_s: float = 0.0
+    maneuver_param: float = 0.0
+    maneuver_next_at: float = 0.0
+    maneuver_phase: str = "cruise"
+    maneuver_phase_start: float = 0.0
+    maneuver_speed0_km_s: float = 0.0
 
     @property
     def adsb_silent(self) -> bool:
@@ -374,6 +386,54 @@ _AIRFRAME_KINEMATICS: dict[str, tuple[tuple[float, float], tuple[float, float]]]
     "piston": ((0.040, 0.070), (0.5, 3.0)),
     "helicopter": ((0.030, 0.070), (0.2, 1.5)),
 }
+
+# Bistatic radar-equation SNR (snr_model="radar").  PLACEHOLDERS: the reference
+# point (25 dB for a 10 m^2 target at 30 km from both TX and RX) and the RCS
+# values below are round numbers at ~500 MHz, to be calibrated against archived
+# real-node SNR vs range before anything downstream is tuned on them.
+SNR_REF_DB = 25.0
+SNR_REF_RCS_M2 = 10.0
+SNR_REF_RANGE_KM = 30.0
+SNR_MIN_RANGE_KM = 0.5
+SNR_FLOOR_DB = 4.0
+SNR_CAP_DB = 60.0
+SNR_MODELS = ("legacy", "radar")
+_AIRFRAME_RCS_M2: dict[str, float] = {
+    "jet": 20.0,
+    "turboprop": 10.0,
+    "piston": 2.0,
+    "helicopter": 5.0,
+    "drone": 0.02,
+}
+
+
+def radar_snr_db(rcs_m2: float, r_tx_km: float, r_rx_km: float) -> float:
+    """Noise-free bistatic radar-equation SNR (dB), referenced to SNR_REF_DB.
+
+    Received power goes as sigma / (R_tx^2 * R_rx^2), so each leg costs 20*log10 of
+    its range ratio; the 0.5 km floor stops a target on top of a node reading as
+    infinitely loud.
+    """
+    r_tx = max(r_tx_km, SNR_MIN_RANGE_KM)
+    r_rx = max(r_rx_km, SNR_MIN_RANGE_KM)
+    return (
+        SNR_REF_DB
+        + 10.0 * math.log10(rcs_m2 / SNR_REF_RCS_M2)
+        - 20.0 * math.log10(r_tx / SNR_REF_RANGE_KM)
+        - 20.0 * math.log10(r_rx / SNR_REF_RANGE_KM)
+    )
+
+
+# Helicopter hover / piston orbit timings.  Only these airframes draw them (see
+# _spawn_aircraft), so the default all-jet mix consumes no extra random numbers.
+_HOVER_GAP_S = (120.0, 300.0)
+_HOVER_HOLD_S = (20.0, 60.0)
+_HOVER_SPEED_KM_S = (0.0, 0.003)
+_HOVER_RAMP_S = 10.0
+_ORBIT_GAP_S = (180.0, 400.0)
+_ORBIT_DURATION_S = (60.0, 150.0)
+_ORBIT_RATE_DEG_S = (3.0, 6.0)
+_HOVER_PHASES = ("slowing", "hold", "accel")
 
 
 def _unit_toward(origin, point):
@@ -530,6 +590,9 @@ class SimulationWorld:
         self.cpi_s: float = 0.5
         # Fractions of non-drone aircraft by airframe.
         self.airframe_mix: dict[str, float] = {"jet": 1.0}
+        # "legacy" keeps the size-blind 25 - 10*log10(range) SNR; "radar" uses the
+        # bistatic radar equation with a per-airframe RCS (see radar_snr_db).
+        self.snr_model: str = "legacy"
 
     def add_node(self, config: NodeConfig):
         """Register a synthetic node in the simulation.
@@ -757,7 +820,7 @@ class SimulationWorld:
         vel_north = speed_km_s * math.cos(heading_rad)
         vel_up = random.uniform(-0.003, 0.003)
 
-        return SimulatedAircraft(
+        ac = SimulatedAircraft(
             object_id=oid,
             lat=lat,
             lon=lon,
@@ -785,6 +848,21 @@ class SimulationWorld:
             waypoint_idx=1,
             **self._maybe_schedule_anomaly(is_anomalous, object_type),
         )
+        # Drawn last, and only for these airframes, so every earlier draw (and the
+        # whole default all-jet sequence) is exactly what it was without them.
+        if airframe == "helicopter":
+            ac.maneuver_kind = "hover"
+            ac.maneuver_gap_s = random.uniform(*_HOVER_GAP_S)
+            ac.maneuver_hold_s = random.uniform(*_HOVER_HOLD_S)
+            ac.maneuver_param = random.uniform(*_HOVER_SPEED_KM_S)
+            ac.maneuver_next_at = self._time + ac.maneuver_gap_s
+        elif airframe == "piston":
+            ac.maneuver_kind = "orbit"
+            ac.maneuver_gap_s = random.uniform(*_ORBIT_GAP_S)
+            ac.maneuver_hold_s = random.uniform(*_ORBIT_DURATION_S)
+            ac.maneuver_param = random.uniform(*_ORBIT_RATE_DEG_S) * random.choice((-1.0, 1.0))
+            ac.maneuver_next_at = self._time + ac.maneuver_gap_s
+        return ac
 
     def _roll_adsb_outage(self, has_adsb: bool, start_range: tuple[float, float]) -> tuple[float | None, float | None]:
         """Roll a transponder-outage window, or (None, None) for no outage.
@@ -950,6 +1028,10 @@ class SimulationWorld:
                 # Real traffic is a leader for synthetic trailers to yield
                 # to, never a trailer: its speed is the feed's to set.
                 continue
+            if ac.maneuver_phase in _HOVER_PHASES:
+                # A hovering helicopter owns its speed; blending it back toward
+                # cruise would cancel the hover.
+                continue
             base = ac.base_speed_km_s or ac.speed_km_s
             target = base * 0.7 if ac.object_id in slowed else base
             ac.speed_km_s += (target - ac.speed_km_s) * blend
@@ -1016,18 +1098,25 @@ class SimulationWorld:
             ac.vel_up = 0.0
         ac.alt_km = max(0.1, min(ac.alt_km, 15.0))
 
+        maneuver = self._advance_maneuver(ac)
+
         # ── Orbit anomaly: circle in place instead of following waypoints ────
         if ac.anomaly_event == "orbit" and ac.anomaly_fired:
             # Constant 6°/s turn → tight circle (~1 km radius at 200 m/s)
             ac.heading_deg = (ac.heading_deg + 6.0 * dt) % 360
+        elif maneuver == "orbit":
+            # Constant-rate circuit; the waypoint is not "reached" while circling.
+            ac.heading_deg = (ac.heading_deg + ac.maneuver_param * dt) % 360
         elif ac.waypoint_idx < len(ac.waypoints):
             # Navigate toward next waypoint
             target_wp = ac.waypoints[ac.waypoint_idx]
             dist_to_wp = _haversine_km(ac.lat, ac.lon, target_wp[0], target_wp[1])
 
             if dist_to_wp < 5.0:
-                # Arrived at waypoint, move to next
-                ac.waypoint_idx += 1
+                # Arrived at waypoint, move to next.  A hovering helicopter has
+                # not flown there, so it only advances once it is moving again.
+                if maneuver is None:
+                    ac.waypoint_idx += 1
             else:
                 # Steer toward waypoint (gradual turn)
                 desired_heading = _bearing_deg(ac.lat, ac.lon, target_wp[0], target_wp[1])
@@ -1066,6 +1155,60 @@ class SimulationWorld:
                 # Random speed/heading change
                 ac.speed_km_s = random.uniform(0.01, 0.5)
                 ac.heading_deg = random.uniform(0, 360)
+
+    def _advance_maneuver(self, ac: SimulatedAircraft) -> str | None:
+        """Step a helicopter's hover or a piston's orbit; return "hover", "orbit" or None.
+
+        Hover owns speed_km_s while it runs (slow ~10 s, hold, accelerate ~10 s back
+        to base); the caller derives the velocity vector from speed and heading
+        afterwards, so body Doppler follows.  Anomalous and departing aircraft
+        drop the maneuver so they behave exactly as every other aircraft does.
+        """
+        if ac.maneuver_kind is None:
+            return None
+        now = self._time
+        if ac.is_anomalous or ac.departing:
+            ac.maneuver_phase = "cruise"
+            return None
+        if ac.maneuver_kind == "orbit":
+            if ac.maneuver_phase == "cruise":
+                if now < ac.maneuver_next_at:
+                    return None
+                ac.maneuver_phase = "orbit"
+                ac.maneuver_phase_start = now
+            if now - ac.maneuver_phase_start >= ac.maneuver_hold_s:
+                ac.maneuver_phase = "cruise"
+                ac.maneuver_next_at = now + ac.maneuver_gap_s
+                return None
+            return "orbit"
+
+        base = ac.base_speed_km_s or ac.speed_km_s
+        if ac.maneuver_phase == "cruise":
+            if now < ac.maneuver_next_at:
+                return None
+            ac.maneuver_phase = "slowing"
+            ac.maneuver_phase_start = now
+            ac.maneuver_speed0_km_s = ac.speed_km_s
+        if ac.maneuver_phase == "slowing":
+            frac = min(1.0, (now - ac.maneuver_phase_start) / _HOVER_RAMP_S)
+            ac.speed_km_s = ac.maneuver_speed0_km_s + (ac.maneuver_param - ac.maneuver_speed0_km_s) * frac
+            if frac >= 1.0:
+                ac.maneuver_phase = "hold"
+                ac.maneuver_phase_start = now
+        elif ac.maneuver_phase == "hold":
+            ac.speed_km_s = ac.maneuver_param
+            if now - ac.maneuver_phase_start >= ac.maneuver_hold_s:
+                ac.maneuver_phase = "accel"
+                ac.maneuver_phase_start = now
+        if ac.maneuver_phase == "accel":
+            frac = min(1.0, (now - ac.maneuver_phase_start) / _HOVER_RAMP_S)
+            ac.speed_km_s = ac.maneuver_param + (base - ac.maneuver_param) * frac
+            if frac >= 1.0:
+                ac.speed_km_s = base
+                ac.maneuver_phase = "cruise"
+                ac.maneuver_next_at = now + ac.maneuver_gap_s
+                return None
+        return "hover"
 
     def _fire_anomaly_event(self, ac: SimulatedAircraft):
         """Execute a scheduled mid-flight anomaly event."""
@@ -1156,6 +1299,17 @@ class SimulationWorld:
         angle_diff = abs((bearing - node.beam_azimuth_deg + 180) % 360 - 180)
         return angle_diff <= node.beam_width_deg / 2
 
+    def _body_snr(self, ac: SimulatedAircraft, target_enu, tx_enu) -> float:
+        """Body SNR (dB) with the usual Gaussian noise and the 4 dB floor, per snr_model."""
+        if self.snr_model == "radar":
+            r_rx = _norm(target_enu)
+            r_tx = _norm([target_enu[i] - tx_enu[i] for i in range(3)])
+            rcs = _AIRFRAME_RCS_M2.get(ac.airframe, SNR_REF_RCS_M2)
+            return min(max(radar_snr_db(rcs, r_tx, r_rx) + random.gauss(0, 2), SNR_FLOOR_DB), SNR_CAP_DB)
+        dist = _norm(target_enu)
+        base_snr = 25 - 10 * math.log10(max(dist, 1))
+        return max(base_snr + random.gauss(0, 2), 4.0)
+
     def _micro_doppler_lines(self, ac, node, target_enu, tx_enu, body_doppler, body_snr) -> list[tuple[float, float]]:
         """Rotor/propeller comb lines (doppler_hz, snr_db) this aircraft shows this node right now."""
         rotors = micro_doppler.AIRFRAMES.get(ac.airframe, ())
@@ -1233,9 +1387,7 @@ class SimulationWorld:
             body_delay = delay
 
             # SNR depends on distance — compute before noise/miss decisions
-            dist = _norm(target_enu)
-            base_snr = 25 - 10 * math.log10(max(dist, 1))
-            snr = max(base_snr + random.gauss(0, 2), 4.0)
+            snr = self._body_snr(ac, target_enu, tx_enu)
 
             # SNR-dependent missed detection: weaker signals are harder to detect.
             # P(miss) rises from ~5% at SNR 20+ to ~40% near detection threshold SNR 5.
@@ -1635,9 +1787,7 @@ class SimulationWorld:
                     delay_noisy = delay + random.gauss(0, 0.3)
                     doppler_noisy = doppler + random.gauss(0, 2.0)
 
-                    dist = _norm(target_enu)
-                    base_snr = 25 - 10 * math.log10(max(dist, 1))
-                    snr = max(base_snr + random.gauss(0, 2), 4.0)
+                    snr = self._body_snr(ac, target_enu, tx_enu)
 
                     delays.append(round(delay_noisy, 2))
                     dopplers.append(round(doppler_noisy, 2))
