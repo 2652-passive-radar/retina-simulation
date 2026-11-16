@@ -40,8 +40,10 @@ from retina_simulation.generator import (
     generate_fleet,
 )
 from retina_simulation.live_adsb import LiveAdsbClient
+from retina_simulation.micro_doppler import AIRFRAMES
 from retina_simulation.tower_resolver import apply_tower_assignments, resolve_towers
 from retina_simulation.world import (
+    SNR_MODELS,
     MetroCell,
     NodeConfig,
     SimulationWorld,
@@ -694,6 +696,8 @@ def build_ground_truth_payload(aircraft_summaries: list[dict]) -> list[dict]:
                 "heading": ac.get("heading", 0),
                 "speed_ms": ac.get("speed_ms", 0),
                 "object_type": ac.get("object_type", "aircraft"),
+                # Rotating-part class, so the server can score classifiers against sim truth.
+                "airframe": ac.get("airframe", "jet"),
                 "is_anomalous": ac.get("is_anomalous", False),
                 "has_adsb": ac.get("has_adsb", False),
                 # Transponder present but currently silent.  has_adsb stays
@@ -1221,6 +1225,61 @@ def _parse_metro_areas(metros_str: str) -> list[dict]:
     return result
 
 
+def _resolve_fc_override(cli_value: float | None) -> float | None:
+    """--fc-hz wins; SIM_FC_HZ is the fallback so a container can set it without editing its command."""
+    if cli_value is not None:
+        return cli_value
+    env = os.environ.get("SIM_FC_HZ", "").strip()
+    return float(env) if env else None
+
+
+def parse_airframe_mix(spec: str) -> dict[str, float]:
+    """Parse "jet:0.5,turboprop:0.2" into normalised fractions, rejecting unknown airframes."""
+    mix: dict[str, float] = {}
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, sep, weight = part.partition(":")
+        name = name.strip().lower()
+        if name not in AIRFRAMES:
+            raise ValueError(f"unknown airframe {name!r} (choose from {', '.join(sorted(AIRFRAMES))})")
+        value = float(weight) if sep else 1.0
+        if value < 0:
+            raise ValueError(f"negative airframe weight for {name!r}")
+        mix[name] = mix.get(name, 0.0) + value
+    total = sum(mix.values())
+    if total <= 0:
+        raise ValueError("airframe mix has no positive weight")
+    return {name: v / total for name, v in mix.items() if v > 0}
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _resolve_micro_doppler(args) -> tuple[bool, float, dict[str, float] | None]:
+    """(enabled, cpi_s, airframe_mix): flags win, SIM_MICRO_DOPPLER / SIM_CPI_S / SIM_AIRFRAME_MIX fall back."""
+    enabled = bool(getattr(args, "micro_doppler", False)) or _env_flag("SIM_MICRO_DOPPLER")
+    cpi = getattr(args, "cpi_s", None)
+    if cpi is None:
+        env_cpi = os.environ.get("SIM_CPI_S", "").strip()
+        cpi = float(env_cpi) if env_cpi else 0.5
+    mix = getattr(args, "airframe_mix", None)
+    env_mix = os.environ.get("SIM_AIRFRAME_MIX", "").strip()
+    if mix is None and env_mix:
+        mix = parse_airframe_mix(env_mix)
+    return enabled, cpi, mix
+
+
+def _resolve_snr_model(args) -> str:
+    """--snr-model wins; SIM_SNR_MODEL is the fallback so a container can set it without editing its command."""
+    model = getattr(args, "snr_model", None) or os.environ.get("SIM_SNR_MODEL", "").strip().lower() or "legacy"
+    if model not in SNR_MODELS:
+        raise ValueError(f"unknown SNR model {model!r} (choose from {', '.join(SNR_MODELS)})")
+    return model
+
+
 async def main_async(args):
     """Main async entry point."""
     # Load or generate fleet config
@@ -1233,6 +1292,7 @@ async def main_async(args):
     # stamp, or the in-process generation fallback below, never triggers a
     # restart loop.
     scene = None
+    fc_hz_override = _resolve_fc_override(getattr(args, "fc_hz", None))
     if args.config and os.path.exists(args.config):
         with open(args.config) as f:
             data = json.load(f)
@@ -1242,6 +1302,11 @@ async def main_async(args):
             all_nodes = data.get("nodes", [])
         cells = data.get("cells", [])
         scene = data.get("fleet", {}).get("scene")
+        # A pre-generated file carries its own tower frequencies; the override
+        # has to be applied to it too or it would only affect auto-generation.
+        if fc_hz_override is not None:
+            for n in all_nodes:
+                n["fc_hz"] = fc_hz_override
     else:
         log.info("No config file, generating %d nodes...", args.nodes)
         regions = [r.strip() for r in args.regions.split(",")]
@@ -1252,6 +1317,7 @@ async def main_async(args):
             n_cluster=args.n_cluster,
             n_clusters=args.n_clusters,
             metro=getattr(args, "metro", None),
+            fc_hz_override=fc_hz_override,
         )
         cells = coverage_cells(
             n_cluster=args.n_cluster,
@@ -1322,6 +1388,16 @@ async def main_async(args):
 
     # Build shared simulation world
     orchestrator._build_world()
+    md_enabled, md_cpi_s, md_mix = _resolve_micro_doppler(args)
+    orchestrator.world.micro_doppler_enabled = md_enabled
+    orchestrator.world.cpi_s = md_cpi_s
+    if md_mix is not None:
+        orchestrator.world.airframe_mix = md_mix
+    if md_enabled or md_mix is not None:
+        log.info("Micro-Doppler: enabled=%s cpi=%.2fs airframe_mix=%s", md_enabled, md_cpi_s, md_mix or "jet only")
+    orchestrator.world.snr_model = _resolve_snr_model(args)
+    if orchestrator.world.snr_model != "legacy":
+        log.info("SNR model: %s", orchestrator.world.snr_model)
 
     # Handle graceful shutdown
     loop = asyncio.get_event_loop()
@@ -1562,7 +1638,44 @@ def main():
         default=0.6,
         help="Fraction of spawns routed through metro coverage rings (rest en-route)",
     )
+    parser.add_argument(
+        "--fc-hz",
+        type=float,
+        default=None,
+        help="Force every node onto this carrier (Hz), e.g. 500000000 for the "
+        "Vancouver DTV setup. Falls back to $SIM_FC_HZ; default keeps each tower's frequency.",
+    )
+    parser.add_argument(
+        "--micro-doppler",
+        action="store_true",
+        help="Emit rotor/propeller comb lines as extra detections for non-jet airframes. Falls back to $SIM_MICRO_DOPPLER=1.",
+    )
+    parser.add_argument(
+        "--cpi-s",
+        type=float,
+        default=None,
+        help="Emulated CPI in seconds (sets micro-Doppler line resolution). Falls back to $SIM_CPI_S; default 0.5.",
+    )
+    parser.add_argument(
+        "--airframe-mix",
+        type=parse_airframe_mix,
+        default=None,
+        help='Airframe fractions of non-drone aircraft, e.g. "jet:0.5,turboprop:0.2,piston:0.2,helicopter:0.1" '
+        "(normalised). Falls back to $SIM_AIRFRAME_MIX; default all jets.",
+    )
+    parser.add_argument(
+        "--snr-model",
+        choices=SNR_MODELS,
+        default=None,
+        help="Detection SNR model: legacy (range only, the default) or radar (bistatic radar equation with a "
+        "per-airframe RCS). Falls back to $SIM_SNR_MODEL.",
+    )
     args = parser.parse_args()
+    try:
+        _resolve_micro_doppler(args)
+        _resolve_snr_model(args)
+    except ValueError as e:
+        parser.error(str(e))
 
     asyncio.run(main_async(args))
 

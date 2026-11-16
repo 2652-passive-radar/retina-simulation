@@ -26,6 +26,10 @@ _.check_hostname
 # ssl.SSLContext attribute; assignment configures the context
 #   retina_simulation/tower_resolver.py:126
 _.verify_mode
+# public micro-Doppler API for training data and plots; callers live outside the package
+#   retina_simulation/micro_doppler.py  (spectrogram, Rotor.offset_m)
+spectrogram
+_.offset_m
 
 # ── UNREVIEWED: appears dead, needs a decision (delete, or finish wiring) ──────
 # TODO: no reference found anywhere in the estate
