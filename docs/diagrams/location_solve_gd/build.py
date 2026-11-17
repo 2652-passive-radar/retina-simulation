@@ -151,7 +151,7 @@ def plot_propose(geo, meas, guess, ids):
     cost = sum((_delay_field(geo, m["node_id"], e, n, guess["alt_km"]) - m["delay_us"]) ** 2 for m in meas)
     fig, ax = _fig(2.6, 2.3)
     ax.imshow(np.log10(cost + 1), extent=(-45, 45, -45, 45), origin="lower", cmap="Blues_r", alpha=0.55)
-    for i, m in enumerate(meas):
+    for m in meas:
         ax.contour(e, n, _delay_field(geo, m["node_id"], e, n, guess["alt_km"]), levels=[m["delay_us"]],
                    colors=[TOWER[ids.index(m["node_id"])][1]], linewidths=0.9)  # fmt: skip
     rx = geo.nodes[ids[0]][0]
