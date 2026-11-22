@@ -7,6 +7,7 @@ retina_geolocator; matplotlib and shapely must be installed in it too)::
     python tools/run_experiment.py experiments/receiver_motion.json      # step 1 (see motion_experiment.py)
     python tools/run_experiment.py experiments/receiver_gnss.json        # step 3c (see gnss_experiment.py)
     python tools/run_experiment.py experiments/receiver_gnss_mc.json     # step 3d (see gnss_mc.py)
+    python tools/run_experiment.py experiments/doa_static.json           # direction finding 1a (doa_experiment.py)
     python tools/run_experiment.py experiments/baseline_static.json --system --backend-dir ../../backend
 
 Default (about a minute): records each seed without a server, solves it
@@ -43,9 +44,13 @@ sys.path.insert(0, _TOOLS)
 sys.path.insert(0, _REPO)
 
 import experiment_report  # noqa: E402
-import offline_solve  # noqa: E402
 
 from retina_simulation import experiment  # noqa: E402
+
+try:
+    import offline_solve
+except SystemExit:  # retina_geolocator missing: only the direction-finding study can run
+    offline_solve = None
 
 _BACKEND_URL = "http://localhost:8000"
 
@@ -150,6 +155,31 @@ def _run_system_seed(exp: dict, run: dict, sys_dir: str, backend_dir: str, backe
                 backend.kill()
 
 
+def record_all(exp: dict, seed_dirs: dict[int, str], accept_changes: bool, exp_file: str) -> None:
+    """Record every run of ``exp`` and check it against its stored fingerprint
+    (storing it the first time).  Stops on a mismatch unless ``accept_changes``."""
+    changed = []
+    for run in exp["runs"]:
+        got = experiment.record_run(exp, run, seed_dirs[run["seed"]])
+        if "fingerprint" not in run:
+            run["fingerprint"] = got
+            changed.append(run["seed"])
+            continue
+        diff = experiment.fingerprint_mismatch(run["fingerprint"], got)
+        if diff and not accept_changes:
+            raise SystemExit(
+                f"seed {run['seed']}: the simulator no longer reproduces this run's recording:\n  "
+                + "\n  ".join(diff)
+                + "\nRe-run with --accept-changes to adopt the new recording as the reference."
+            )
+        if diff:
+            run["fingerprint"] = got
+            changed.append(run["seed"])
+    if changed:
+        experiment.save(exp)
+        print(f"Stored fingerprints for seeds {changed} in {exp_file}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run every seed of an experiment and build its figures")
     parser.add_argument("experiment", help="experiments/<name>.json")
@@ -171,6 +201,16 @@ def main() -> None:
     args = parser.parse_args()
 
     exp = experiment.load(args.experiment)
+    if "doa" in exp:
+        import doa_experiment
+
+        doa_experiment.run(exp, args, _REPO, _commit)
+        return
+    if offline_solve is None:
+        raise SystemExit(
+            "retina_geolocator is not installed in this Python. Run this with the backend's "
+            "Python (retina-server/backend/.venv), which has it."
+        )
     if "sweeps" in exp:
         import gnss_mc
 
@@ -199,26 +239,7 @@ def main() -> None:
     seed_dirs = {r["seed"]: os.path.join(out, f"seed-{r['seed']}") for r in exp["runs"]}
 
     # 1. Record every seed and check it against its stored fingerprint.
-    changed = []
-    for run in exp["runs"]:
-        got = experiment.record_run(exp, run, seed_dirs[run["seed"]])
-        if "fingerprint" not in run:
-            run["fingerprint"] = got
-            changed.append(run["seed"])
-            continue
-        diff = experiment.fingerprint_mismatch(run["fingerprint"], got)
-        if diff and not args.accept_changes:
-            raise SystemExit(
-                f"seed {run['seed']}: the simulator no longer reproduces this run's recording:\n  "
-                + "\n  ".join(diff)
-                + "\nRe-run with --accept-changes to adopt the new recording as the reference."
-            )
-        if diff:
-            run["fingerprint"] = got
-            changed.append(run["seed"])
-    if changed:
-        experiment.save(exp)
-        print(f"Stored fingerprints for seeds {changed} in {args.experiment}")
+    record_all(exp, seed_dirs, args.accept_changes, args.experiment)
     print(f"Recorded {len(exp['runs'])} runs into {out}")
 
     # 2. Offline radar-only solves, one process per seed.

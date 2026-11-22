@@ -62,8 +62,12 @@ def fleet_path(exp: dict) -> str:
 
 
 def fleet_nodes(exp: dict) -> list[dict]:
+    """The fleet file's nodes, with the experiment's ``node_overrides`` (e.g.
+    ``{"beam_azimuth_deg": 225}``) applied to every node, so a study can turn
+    the beam without editing the shared fleet file."""
     with open(fleet_path(exp), encoding="utf-8") as f:
-        return json.load(f)["nodes"]
+        nodes = json.load(f)["nodes"]
+    return [dict(n, **exp.get("node_overrides", {})) for n in nodes]
 
 
 def node_config(cfg: dict) -> NodeConfig:

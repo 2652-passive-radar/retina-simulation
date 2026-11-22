@@ -928,3 +928,180 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
 ### Next (not started)
 - Possible: GNSS-reported (Doppler) velocity as a KF measurement, H = [[1 0 1],
   [0 1 0]], sigma_vel ~0.05 m/s (deferred 2026-11-13).
+
+## Direction finding, step 1a: one tower + 3-element array against the multistatic radar (2026-11-22)
+
+A separate strand from the receiver-motion work (branch `claude/doa-array-sim`).
+
+### Goal
+- Compare aircraft localisation of a direction-finding system with today's
+  multistatic system, and find the array accuracy needed to keep it close to
+  the multistatic one.
+  - A, multistatic: 3 reference channels (one per tower) + 1 surveillance
+    antenna; 3 delays + 3 Dopplers; the existing offline solve.
+  - B, direction finding: 1 reference channel (CHAN-DT) + a 3-element
+    array; 1 delay + 1 Doppler + 1 bearing; closed-form solve.
+
+### Decided with you
+- Flights: the same 5 seeds and kinds (101, 202 straight; 303, 404, 505
+  turning), re-sampled with both surveillance antennas facing south-west
+  (225 deg, 120 deg wide), same coverage rules (3-35 km, 10 deg inside the
+  beam edge, bistatic angle <= 150 deg for every tower).
+- Array: equilateral triangle, side lambda/2 at the tower's frequency,
+  element 0 (the one on the RSPduo that also carries the reference) pointing
+  at the beam centre, front-half search. The line is a setting.
+- Estimator: Bartlett (delay-and-sum) scan. With one snapshot and one source
+  per cell it is the maximum-likelihood estimate, and MUSIC would give the
+  same peak, so MUSIC is left out of 1a.
+- B's solve: closed form (ellipse meets bearing). No hybrid solve.
+- Gain errors dropped: with one source in the cell they do not move the bearing.
+- Theory and the numbers behind these choices: the "Direction Finding Primer"
+  page shared in the session.
+
+### Built
+- `retina_simulation/experiment.py`: `node_overrides` in an experiment file is
+  applied to every fleet node (here `beam_azimuth_deg: 225`), so the shared
+  `sites/ubc/fleet.json` and every earlier study are untouched.
+- `retina_simulation/array.py`: element positions (triangle / line), heading
+  and tilt, steering vectors, and one snapshot per detection with the error
+  model:
+  - thermal noise at the detection's SNR + `snr_offset_db`;
+  - fixed phase error per element (per run);
+  - an offset shared by RSPduo B's two channels (per run);
+  - random phase error per element and detection;
+  - coupling, uncompensated (c at one spacing, 1/distance beyond, random
+    phase per run);
+  - one coherent multipath copy at a random azimuth and phase (per
+    detection);
+  - heading and tilt errors (per run).
+  - Draws are keyed by (seed, realisation), separate from the recording's
+    streams, and scaled at use, so every level sees the same draws (paired).
+- `tools/doa.py`: `doa(snapshots, positions, wavelength, az_grid)`, the
+  Bartlett scan (0.25 deg grid, parabolic peak), `front_half(boresight)`.
+  Meant to take real snapshots later.
+- `tools/doa_solve.py`:
+  - each detection's bearing (array model, or truth + Gaussian noise);
+  - `locate`: r_R = (R^2 - L^2) / (2 (R - d.t)), iterated with the aircraft's
+    elevation at an assumed altitude, on WGS84 (for a line array the same
+    iteration turns its cone angle into an azimuth);
+  - errors and metrics.
+- `tools/doa_experiment.py`, `tools/doa_report.py`: record and fingerprint the
+  seeds, solve A (if retina_geolocator is installed), evaluate B at 80 levels
+  x 100 runs (5 seeds x 20 realisations), then tables and figures.
+  `tools/run_experiment.py` dispatches on the file's `doa` block; recording
+  and fingerprinting moved into `run_experiment.record_all`, shared by both
+  paths.
+- `experiments/doa_static.json`: base = baseline, beam override, `doa` block
+  (defaults, levels), plans and fingerprints.
+
+### Changes from the agreed plan (and why)
+- RSPduo B offset: its own term (default 0, swept), not split out of the 5 deg
+  fixed error. The two need separate sizes to give separate requirements.
+- Altitude: one delay and one bearing never measure altitude, so the "weak
+  prior" reduces to an assumed altitude (2 km, the middle of the 1-3 km
+  flights). The true-altitude run is the best case.
+- Sweeps move one error term at a time with every other term off, not from
+  nominal. At nominal, thermal noise dominates and hides the rest.
+- Added the requirement curve (true bearing + Gaussian noise), which maps
+  bearing accuracy straight to position accuracy.
+- 20 realisations per seed instead of 4: B is cheap (80 levels in ~2.5 min on
+  4 cores).
+
+### Verified
+- `tests/test_doa.py` (9):
+  - noise-free triangle bearings exact (< 0.02 deg) at 0/10/30 deg elevation;
+  - thermal spread within 10% of 1/(2 pi (s/lambda) sqrt(SNR));
+  - front-half search never answers behind the array;
+  - RSPduo B offset: no bias along element 0, 0.37 deg/deg across it;
+  - draws keyed by run;
+  - beam override reaches the doa study and not the baseline;
+  - closed-form solve with true delay, bearing and altitude < 1 m (worst
+    0.06 m);
+  - perfect array leaves only delay and altitude error;
+  - the 5 recordings reproduce their fingerprints.
+- Full suite: 294 passed, 4 skipped (no retina_geolocator here). ruff clean.
+- Two runs give identical tables. Flight plans equal the preview shown before
+  building.
+
+### Results (system B only: retina_geolocator is not installed here; A = step 0's 81.8 m as reference until run locally)
+
+| B variant | Position RMSE (90%) | Median | Bearing RMS | Availability |
+|---|---|---|---|---|
+| nominal triangle | 4.23 km (3.93-4.51) | 1.81 km | 10.2 deg | 72% |
+| nominal line | 1.91 km (1.81-2.01) | | 4.4 deg | 72% |
+| perfect array, altitude assumed 2 km | 50 m (47-54) | | 0 | 72% |
+| perfect array, true altitude | 24 m | | 0 | 72% |
+
+- Requirement curve (Gaussian bearing error):
+
+  | Target RMSE | Bearing error must be below |
+  |---|---|
+  | A's 82 m | 0.15 deg |
+  | 100 m | 0.21 deg |
+  | 200 m | 0.47 deg |
+  | 500 m | 1.2 deg |
+
+- Each term alone, value at which B reaches A's 82 m / 200 m / 500 m:
+
+  | Term | A's 82 m | 200 m | 500 m |
+  |---|---|---|---|
+  | SNR offset | +31 dB | +21 dB | +13 dB |
+  | fixed phase per element | 0.29 deg | 0.89 deg | 2.3 deg |
+  | RSPduo B offset | 1.0 deg | 3.1 deg | 8.1 deg |
+  | random phase | 0.34 deg | 1.05 deg | 2.7 deg |
+  | coupling | -38 dB | -28 dB | -20 dB |
+  | multipath | -42 dB | -33 dB | -24 dB |
+  | heading | 0.14 deg | 0.46 deg | 1.2 deg |
+  | tilt | 2.7 deg | 7.1 deg | > 10 deg |
+
+### Findings
+1. **With a perfect bearing, B beats A on accuracy and availability.**
+   - Accuracy: 50 m (24 m at the true altitude) against 82 m. One delay pins
+     the range well.
+   - Availability: a solve needs one channel (72% of seconds), not three
+     (~41%).
+2. **The bearing is the whole problem.** Matching A needs a total bearing
+   error <= 0.15 deg; even 500 m needs <= 1.2 deg. The nominal triangle gives
+   10 deg, about 65x too much.
+3. **Thermal noise alone (simulator SNR, 9-15 dB at these 11-34 km ranges)
+   costs 6.5 deg and 2.8 km.**
+   - Matching A needs about +31 dB of SNR; 500 m needs +13 dB.
+   - +13 dB is about 20x the integration time (each doubling of the coherent
+     integration time adds 3 dB).
+4. **Every other term must also be small, and they add up.** For A-level
+   accuracy each term alone must be below roughly:
+   - phase calibration 0.3 deg;
+   - RSPduo offset 1 deg (element 0 at the beam centre makes it the
+     mildest);
+   - coupling -38 dB;
+   - multipath -42 dB;
+   - heading 0.14 deg.
+
+   Nominal values are 5-20x larger. Tilt is benign (2.7 deg).
+5. **Line vs triangle:** the line array halves the nominal error (1.9 km
+   against 4.2 km), as the primer predicted for a +-60 deg sector.
+6. **Wrong-lobe solves are rare with the front-half search:** 1.3% nominal,
+   rising to 32% only at -10 dB SNR offset.
+7. **Bottom line: a 3-element array measuring one bearing per detection
+   cannot come near the multistatic accuracy.**
+   - A km-level single-tower position is reachable only with much more SNR
+     and tight calibration.
+   - Ways to close the gap: longer integration, more elements or aperture,
+     averaging bearings over time (tracking, about sqrt(N) for N independent
+     detections), and calibration against the tower and ADS-B aircraft.
+
+### Caveats
+- System A has not been run on these flights (needs retina_geolocator): the
+  82 m reference is step 0's, with the beam at 148 deg on other flights.
+- The simulator's SNR model (25 - 10 log10 r dB) drives the thermal term and
+  is itself an assumption; the SNR-offset column shows how the answer moves.
+- One aircraft, static receiver, perfect association. Fixed per-run terms are
+  sampled over 100 runs.
+
+### Next (not started; your go-ahead first)
+- Run on your machine with the backend's Python to get A on these flights.
+- Options to discuss:
+  - B's sensitivity to the assumed altitude;
+  - bearing averaging over time (a simple tracker) to see how much of the
+    gap it closes;
+  - 4+ elements or longer integration.

@@ -366,3 +366,43 @@ figures from whatever levels are complete. Output:
 | `levels.csv` | per level and case: % increases with intervals, receiver error GD was given, KF coverage and mean NIS |
 | `screening.csv` | stage A: the KF alone, 8 realisations per level, case and seed |
 | `cases\<case>\doppler-on\seed-<n>\analysis\offline_solves_gd_mc_<level>_r<k>.csv` | every solve |
+
+## Direction finding, step 1a: one tower + array against the multistatic radar
+
+`experiments/doa_static.json` compares two systems on 5 flights inside a
+south-west beam (225 deg, 120 deg wide; `node_overrides` turns every node's
+beam without editing `sites/ubc/fleet.json`):
+
+* **A, multistatic:** the 3 towers' delays and Dopplers, the existing offline
+  solve (needs retina_geolocator, i.e. the backend's Python; skipped with a
+  note otherwise).
+* **B, direction finding:** CHAN-DT's delay plus the bearing of a 3-element
+  array (`retina_simulation/array.py`: geometry, snapshot error model;
+  `tools/doa.py`: Bartlett / delay-and-sum scan, front half only;
+  `tools/doa_solve.py`: closed-form ellipse-bearing solve at an assumed 2 km
+  altitude).
+
+Array and error settings are in the file's `doa` block (`array.layout`:
+`triangle` or `line`). B runs 20 bearing realisations per seed at every level:
+nominal, perfect array, Gaussian bearing noise (the requirement curve), and
+each error term alone (`sweeps`).
+
+```
+cd "$root\libs\retina-simulation"
+..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\doa_static.json --out "C:\radar-runs\doa-static\$(Get-Date -Format yyyy-MM-dd_HHmmss)"
+```
+
+About 3 minutes on 4 cores, plus about a minute for system A.
+`--reanalyze <folder>` rebuilds the tables and figures from `results.json`.
+
+| File | Holds |
+|---|---|
+| `summary.csv` | A, B nominal, B at the true altitude, B with a perfect array, B with the other layout: position RMSE (90% interval), median, p95, availability, wrong-lobe rate, bearing RMS |
+| `requirements.csv` | per error term: the value at which B (that term alone) reaches A's RMSE and 100 / 200 / 500 m, with 90% intervals |
+| `sweep.csv` | B at every sweep level |
+| `requirement.png` | B's position RMSE against bearing accuracy, with A |
+| `sensitivity.png` | B's position RMSE against each error term alone |
+| `error_vs_range.png` | each solve's error against distance, A and B |
+| `paths_map.png` | the flights, towers and beam |
+| `results.json` | per-run error sums of every level (for `--reanalyze`) |
+| `seed-<n>\` | the recordings (and A's `analysis\offline_solves.csv`) |
