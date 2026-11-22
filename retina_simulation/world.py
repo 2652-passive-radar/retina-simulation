@@ -195,6 +195,10 @@ class SimulatedAircraft:
     # Constant turn (deg/s, positive = clockwise) for a scripted flight with
     # no waypoints.  0.0 flies straight.
     turn_rate_deg_s: float = 0.0
+    # Scripted altitude tied to the distance from a reference point (an
+    # airport): (ref_lat, ref_lon, base_km, gradient_km_per_km), altitude =
+    # base + gradient * distance, e.g. a 3 deg approach.  None flies level.
+    alt_profile: tuple | None = None
     # Mid-flight anomaly injection (scheduled event)
     anomaly_event: str | None = None  # None | "hijack" | "spoof" | "orbit" | "altitude_jump" | "id_swap"
     anomaly_trigger_at: float = 0.0  # world time when event fires
@@ -373,6 +377,21 @@ def _advance_latlon(lat, lon, alt_km, vel_east, vel_north, dt):
     dlat = math.degrees(vel_north * dt / (m + alt_km))
     dlon = math.degrees(vel_east * dt / ((n + alt_km) * math.cos(math.radians(lat))))
     return lat + dlat, lon + dlon
+
+
+def profile_alt_km(profile: tuple, lat: float, lon: float) -> float:
+    """Altitude (km) of a scripted aircraft whose height follows its distance
+    from a reference point: base + gradient * distance."""
+    ref_lat, ref_lon, base_km, grad = profile
+    return base_km + grad * _haversine_km(ref_lat, ref_lon, lat, lon)
+
+
+def profile_climb_km_s(profile: tuple, lat: float, lon: float, vel_east: float, vel_north: float) -> float:
+    """Vertical speed (km/s) that keeps an aircraft on its altitude profile:
+    gradient times the speed away from the reference point."""
+    ref_lat, ref_lon, _, grad = profile
+    b = math.radians(_bearing_deg(ref_lat, ref_lon, lat, lon))
+    return grad * (vel_east * math.sin(b) + vel_north * math.cos(b))
 
 
 def _haversine_km(lat1, lon1, lat2, lon2):
@@ -1037,7 +1056,10 @@ class SimulationWorld:
 
         # Move in ENU then convert back to LLA
         ac.lat, ac.lon = _advance_latlon(ac.lat, ac.lon, ac.alt_km, ac.vel_east, ac.vel_north, dt)
-        ac.alt_km += ac.vel_up * dt
+        if ac.alt_profile:
+            ac.alt_km = profile_alt_km(ac.alt_profile, ac.lat, ac.lon)
+        else:
+            ac.alt_km += ac.vel_up * dt
         # Level off: vel_up was set once at spawn and integrated forever, so
         # every aircraft eventually saturated against the altitude clamps —
         # the whole fleet ended up pinned to the floor or the ceiling.  Unlike
@@ -1084,6 +1106,8 @@ class SimulationWorld:
         if not ac.is_anomalous:
             ac.vel_east += rng.gauss(0, 0.0005) * dt
             ac.vel_north += rng.gauss(0, 0.0005) * dt
+            if ac.alt_profile:
+                ac.vel_up = profile_climb_km_s(ac.alt_profile, ac.lat, ac.lon, ac.vel_east, ac.vel_north)
         else:
             # Anomalous: erratic behaviour including instant stop/start
             r = rng.random()

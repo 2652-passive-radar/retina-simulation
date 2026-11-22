@@ -105,7 +105,15 @@ def resolve_plans(exp: dict) -> bool:
     added = False
     for run in exp["runs"]:
         if "plan" not in run:
-            plan = sample_plan(run["seed"], run["flight"], nodes, exp["duration_s"], coverage(exp), flight_ranges(exp))
+            plan = sample_plan(
+                run["seed"],
+                run["flight"],
+                nodes,
+                exp["duration_s"],
+                coverage(exp),
+                flight_ranges(exp),
+                alt_model=exp.get("altitude_model"),
+            )
             run["plan"] = plan.to_dict()
             added = True
     return added

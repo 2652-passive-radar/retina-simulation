@@ -20,6 +20,16 @@ detected the aircraft:
 Everything is exact geometry on WGS84 (the simulator's own conversions), so a
 noise-free bearing and delay at the true altitude land on the aircraft.
 Velocity is not solved: one Doppler gives one component of it.
+
+The altitude B assumes (``altitude_assumption``): a fixed altitude, or the
+airport model (altitude = base + gradient x distance from the airport, the
+same shape as the simulated approaches and climb-outs, with one average
+gradient because B cannot tell an arrival from a departure).
+
+3. ``realtime_track``: what a real-time system would report each second from
+   the solves so far: a straight, constant-speed path fitted to the solves of
+   the last ``window_s`` seconds (one pass of outlier rejection), read at the
+   newest one.
 """
 
 import json
@@ -30,7 +40,7 @@ import doa as doa_mod
 import numpy as np
 
 from retina_simulation import array as arr
-from retina_simulation.world import C_KM_US, _enu_to_lla, _lla_to_enu
+from retina_simulation.world import C_KM_US, _enu_to_lla, _haversine_km, _lla_to_enu
 
 WRONG_LOBE_DEG = 20.0
 
@@ -105,11 +115,26 @@ def measure(
     return est
 
 
-def locate(node: dict, delay_us: float, bearing_deg: float, alt_km: float, cone_axis_deg: float | None = None):
+def altitude_fn(assumption: dict | None, fallback_km: float = 2.0):
+    """The altitude (km) B assumes at a position: a function of (lat, lon).
+    ``{"mode": "fixed", "alt_km": 2.0}`` or ``{"mode": "airport", "ref_lat",
+    "ref_lon", "base_m", "gradient_m_per_km"}``."""
+    a = assumption or {"mode": "fixed", "alt_km": fallback_km}
+    if a["mode"] == "fixed":
+        return lambda lat, lon: a["alt_km"]
+    if a["mode"] == "airport":
+        return lambda lat, lon: (
+            (a["base_m"] + a["gradient_m_per_km"] * _haversine_km(a["ref_lat"], a["ref_lon"], lat, lon)) / 1000.0
+        )
+    raise ValueError(f"unknown altitude assumption {a['mode']!r}")
+
+
+def locate(node: dict, delay_us: float, bearing_deg: float, alt_km, cone_axis_deg: float | None = None):
     """(lat, lon) on the bistatic ellipse along the bearing at the assumed
-    altitude, or None when the bearing never meets the ellipse.
-    ``cone_axis_deg``: for a line array, its boresight (the bearing is then a
-    cone angle about the line's axis)."""
+    altitude (km, or a function of (lat, lon) giving it), or None when the
+    bearing never meets the ellipse.  ``cone_axis_deg``: for a line array, its
+    boresight (the bearing is then a cone angle about the line's axis)."""
+    alt_at = alt_km if callable(alt_km) else (lambda lat, lon: alt_km)
     rx_alt_km = node["rx_alt_ft"] * 0.3048e-3
     t = np.array(
         _lla_to_enu(
@@ -118,9 +143,9 @@ def locate(node: dict, delay_us: float, bearing_deg: float, alt_km: float, cone_
     )
     big_l = float(np.linalg.norm(t))
     big_r = delay_us * C_KM_US + big_l
-    up, r_h, az = alt_km - rx_alt_km, None, bearing_deg
+    up, r_h, az = alt_at(node["rx_lat"], node["rx_lon"]) - rx_alt_km, None, bearing_deg
     lat = lon = None
-    for _ in range(8):
+    for _ in range(10):
         el = math.atan2(up, r_h) if r_h else 0.0
         if cone_axis_deg is not None:
             s = math.sin(math.radians(bearing_deg - cone_axis_deg)) / math.cos(el)
@@ -140,7 +165,7 @@ def locate(node: dict, delay_us: float, bearing_deg: float, alt_km: float, cone_
             return None
         p = r * d
         lat, lon, alt = _enu_to_lla(*p, node["rx_lat"], node["rx_lon"], rx_alt_km)
-        up += alt_km - alt
+        up += alt_at(lat, lon) - alt
         r_h = r * math.cos(el)
     return lat, lon
 
@@ -151,11 +176,11 @@ def _en_m(lat0: float, lon0: float, lat: float, lon: float) -> tuple[float, floa
     return east, north
 
 
-def solve(
-    dets: list[dict], bearings: np.ndarray, node: dict, layout: str = "triangle", alt_km: float | None = 2.0
-) -> list[dict]:
-    """One row per detection: the solve and its errors.  ``alt_km`` None uses
-    the true altitude (the best case)."""
+def solve(dets: list[dict], bearings: np.ndarray, node: dict, layout: str = "triangle", alt_km=2.0) -> list[dict]:
+    """One row per detection: the solve and its errors, plus the solved and
+    true positions east/north of the receiver (m) for ``realtime_track``.
+    ``alt_km``: an altitude (km), a function of (lat, lon) giving one
+    (``altitude_fn``), or None for the true altitude (the best case)."""
     cone = node["beam_azimuth_deg"] if layout == "line" else None
     rows = []
     for d, b in zip(dets, bearings):
@@ -166,13 +191,42 @@ def solve(
         if fix is not None:
             e, n = _en_m(d["true_lat"], d["true_lon"], *fix)
             az = math.radians(d["az_true_deg"])
+            pe, pn = _en_m(node["rx_lat"], node["rx_lon"], *fix)
+            te, tn = _en_m(node["rx_lat"], node["rx_lon"], d["true_lat"], d["true_lon"])
             row.update(
                 err_horiz_m=math.hypot(e, n),
                 err_cross_m=e * math.cos(az) - n * math.sin(az),
                 err_along_m=e * math.sin(az) + n * math.cos(az),
+                est_en=(pe, pn),
+                true_en=(te, tn),
             )
         rows.append(row)
     return rows
+
+
+def realtime_track(rows: list[dict], window_s: float, min_points: int = 3) -> list[dict]:
+    """Each second's real-time estimate: a constant-velocity line fitted to
+    the solves of the last ``window_s`` seconds (that second included, nothing
+    later), refitted once without solves more than 3x the median residual
+    off, and read at that second.  Seconds with fewer than ``min_points``
+    solves in the window give no estimate."""
+    pts = [r for r in rows if "est_en" in r]
+    t = np.array([r["t_ms"] / 1000.0 for r in pts])
+    xy = np.array([r["est_en"] for r in pts]) if pts else np.zeros((0, 2))
+    out = []
+    for i, r in enumerate(pts):
+        m = (t > t[i] - window_s) & (t <= t[i])
+        if m.sum() < min_points:
+            continue
+        a = np.stack([np.ones(int(m.sum())), t[m] - t[i]], axis=1)
+        coef, *_ = np.linalg.lstsq(a, xy[m], rcond=None)
+        res = np.hypot(*(xy[m] - a @ coef).T)
+        keep = res <= 3.0 * np.median(res) + 1e-9
+        if keep.sum() >= min_points:
+            coef, *_ = np.linalg.lstsq(a[keep], xy[m][keep], rcond=None)
+        e, n = coef[0, 0] - r["true_en"][0], coef[0, 1] - r["true_en"][1]
+        out.append({"t_ms": r["t_ms"], "range_km": r["range_km"], "err_horiz_m": math.hypot(e, n)})
+    return out
 
 
 def metrics(rows: list[dict], n_ticks: int) -> dict:

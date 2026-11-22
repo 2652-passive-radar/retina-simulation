@@ -125,3 +125,86 @@ def test_doa_experiment_reproduces_its_recordings(tmp_path):
     for run in exp["runs"]:
         got = experiment.record_run(exp, run, str(tmp_path / str(run["seed"])))
         assert experiment.fingerprint_mismatch(run["fingerprint"], got) == [], run["seed"]
+
+
+# --- close-range study: airport altitude profile, real-time averaging ---------
+
+_NEAR = os.path.join(_HERE, "..", "experiments", "doa_near.json")
+
+
+def test_level_plans_keep_their_old_format():
+    from retina_simulation.scripted import FlightPlan
+
+    plan = FlightPlan(lat=49.0, lon=-123.0, alt_m=1500.0, speed_ms=80.0, heading_deg=90.0)
+    assert set(plan.to_dict()) == {"lat", "lon", "alt_m", "speed_ms", "heading_deg", "turn_rate_deg_s"}
+
+
+def test_profile_flight_climbs_with_distance_from_the_airport(tmp_path):
+    """The world flies a profile plan at alt = base + gradient x distance from
+    YVR, as propagate predicts, and its vertical speed matches its climb."""
+    from retina_simulation.scripted import FlightPlan, propagate
+    from retina_simulation.world import _haversine_km
+
+    exp = experiment.load(_NEAR)
+    model = exp["altitude_model"]
+    run = exp["runs"][0]
+    plan = FlightPlan(**run["plan"])
+    assert plan.alt_gradient_m_per_km in model["gradients_m_per_km"]
+    experiment.record_run(exp, run, str(tmp_path))
+    import json
+
+    with open(tmp_path / "truth.ndjson", encoding="utf-8") as f:
+        truth = [json.loads(line)["aircraft"][0] for line in f]
+    expected = propagate(plan, exp["duration_s"])[1:]
+    for st, (lat, lon, alt_km) in zip(truth, expected):
+        d = _haversine_km(model["ref_lat"], model["ref_lon"], st["lat"], st["lon"])
+        assert abs(st["alt_m"] - (model["base_m"] + plan.alt_gradient_m_per_km * d)) < 0.5
+        assert abs(st["alt_m"] - alt_km * 1000.0) < 100.0  # propagate has no motion jitter
+    # the vertical speed the echo's Doppler uses matches the climb, second by second
+    world = experiment.build_world(exp, run, experiment.fleet_nodes(exp))
+    ac = world.aircraft[0]
+    for _ in range(30):
+        alt0, up = ac.alt_km, ac.vel_up
+        world.step(1.0)
+        assert abs((ac.alt_km - alt0) - up) * 1000.0 < 0.3
+
+
+def test_realtime_track_uses_only_past_solves():
+    rows = [
+        {"t_ms": 1000 * t, "range_km": 5.0, "est_en": (80.0 * t, 0.0), "true_en": (80.0 * t, 0.0)} for t in range(30)
+    ]
+    exact = doa_solve.realtime_track(rows, 10)
+    assert len(exact) == 28 and max(r["err_horiz_m"] for r in exact) < 1e-6
+    changed = [dict(r, est_en=(r["est_en"][0] + (5000.0 if r["t_ms"] >= 20000 else 0.0), 0.0)) for r in rows]
+    before = [r for r in doa_solve.realtime_track(changed, 10) if r["t_ms"] < 20000]
+    assert max(r["err_horiz_m"] for r in before) < 1e-6
+
+
+def test_airport_altitude_assumption_on_a_profile_flight(tmp_path):
+    """True bearing and delay, altitude from the airport model with the
+    flight's own gradient: lands on the aircraft."""
+    exp = experiment.load(_NEAR)
+    run = exp["runs"][0]
+    experiment.record_run(exp, run, str(tmp_path))
+    node = doa_solve.node_config(str(tmp_path), exp["doa"]["node"])
+    dets = doa_solve.detections(str(tmp_path), exp["doa"]["node"])
+    a = dict(exp["doa"]["altitude_assumption"], gradient_m_per_km=run["plan"]["alt_gradient_m_per_km"])
+    alt = doa_solve.altitude_fn(a)
+    worst = 0.0
+    for d in dets:
+        lat, lon = doa_solve.locate(node, d["delay_true_us"], d["az_true_deg"], alt)
+        worst = max(worst, math.hypot(*doa_solve._en_m(d["true_lat"], d["true_lon"], lat, lon)))
+    assert dets and worst < 2.0
+
+
+def test_near_experiment_flights_stay_within_10_km_and_reproduce(tmp_path):
+    from retina_simulation.scripted import FlightPlan, propagate
+    from retina_simulation.world import _haversine_km
+
+    exp = experiment.load(_NEAR)
+    rx = experiment.fleet_nodes(exp)[0]
+    for run in exp["runs"]:
+        for lat, lon, _ in propagate(FlightPlan(**run["plan"]), exp["duration_s"]):
+            assert 3.0 <= _haversine_km(rx["rx_lat"], rx["rx_lon"], lat, lon) <= 10.0
+        got = experiment.record_run(exp, run, str(tmp_path / str(run["seed"])))
+        assert experiment.fingerprint_mismatch(run["fingerprint"], got) == [], run["seed"]

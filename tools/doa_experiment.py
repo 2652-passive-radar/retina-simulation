@@ -15,7 +15,8 @@ Steps: sample the flight plans if the file has none (beam turned by
 then evaluate B at every level:
 
 * ``nominal``: every error at its default (``doa.errors``), and the same at
-  the true altitude, a perfect array, and the other layout;
+  the true altitude, with the fixed errors calibrated out, a perfect array,
+  and the other layout;
 * ``bearing_noise``: the true bearing plus Gaussian noise of each size, which
   maps a bearing accuracy to a position accuracy (the requirement curve);
 * one sweep per error term with every other term off ("alone"), so each
@@ -24,7 +25,11 @@ then evaluate B at every level:
   nominal.
 
 Each level runs ``doa.realisations`` bearing realisations per seed; a
-realisation uses the same underlying random draws at every level.
+realisation uses the same underlying random draws at every level.  Every
+level is scored per second and, for each of ``doa.tracking_windows_s``, as a
+real-time system would report it (doa_solve.realtime_track).  B assumes the
+altitude given by ``doa.altitude_assumption`` (default: fixed
+``doa.assumed_alt_km``).
 doa_report.py turns ``results.json`` into the tables and figures.
 """
 
@@ -51,17 +56,20 @@ def levels(exp: dict) -> list[dict]:
     nominal, none = d["errors"], arr.ArrayErrors.none().to_dict()
     layout = d["array"]["layout"]
     other = "line" if layout == "triangle" else "triangle"
-    alt = d["assumed_alt_km"]
+    calibrated = dict(
+        nominal, phase_fixed_deg=0.0, device_offset_deg=0.0, coupling_db=None, heading_deg=0.0, tilt_deg=0.0
+    )
 
-    def lv(group, param=None, value=None, errors=None, gaussian=None, alt_km=alt, lay=layout):
+    def lv(group, param=None, value=None, errors=None, gaussian=None, true_alt=False, lay=layout):
         return {"group": group, "param": param, "value": value, "errors": errors, "gaussian": gaussian,
-                "alt_km": alt_km, "layout": lay}  # fmt: skip
+                "true_alt": true_alt, "layout": lay}  # fmt: skip
 
     out = [
         lv("nominal", errors=nominal),
-        lv("nominal_true_alt", errors=nominal, alt_km=None),
+        lv("nominal_true_alt", errors=nominal, true_alt=True),
+        lv("calibrated", errors=calibrated),
         lv("perfect", errors=none),
-        lv("perfect_true_alt", errors=none, alt_km=None),
+        lv("perfect_true_alt", errors=none, true_alt=True),
         lv(f"nominal_{other}", errors=nominal, lay=other),
     ]
     out += [lv("bearing_noise", "bearing_noise_deg", s, gaussian=s) for s in d["bearing_noise_deg"]]
@@ -81,25 +89,38 @@ def _dets(seed_dir: str, node_id: str) -> tuple[dict, list[dict]]:
     return _dets_cache[key]
 
 
+def windows(d: dict) -> list[int]:
+    """0 (each second on its own) and every real-time averaging window."""
+    return [0, *d.get("tracking_windows_s", [])]
+
+
 def _run_level(task: tuple) -> dict:
-    """Every run (seed x realisation) of one level: per-run error sums, and
-    for the nominal level every solve (for the figures)."""
+    """Every run (seed x realisation) of one level: per-run error sums for
+    each averaging window, and for the nominal level every solve (for the
+    figures)."""
     level, seed_dirs, d, n_ticks = task
     cfg = arr.ArrayConfig(**dict(d["array"], layout=level["layout"]))
     err = arr.ArrayErrors(**level["errors"]) if level["errors"] else arr.ArrayErrors.none()
-    runs, solves = [], []
+    alt = (
+        None if level["true_alt"] else doa_solve.altitude_fn(d.get("altitude_assumption"), d.get("assumed_alt_km", 2.0))
+    )
+    runs, solves = [], {str(w): [] for w in windows(d)}
     for seed, seed_dir in seed_dirs.items():
         node, dets = _dets(seed_dir, d["node"])
         for r in range(d["realisations"]):
             b = doa_solve.measure(dets, node, cfg, err, (seed, r), level["gaussian"])
-            rows = doa_solve.solve(dets, b, node, level["layout"], level["alt_km"])
-            e2 = [x["err_horiz_m"] ** 2 for x in rows if "err_horiz_m" in x]
+            rows = doa_solve.solve(dets, b, node, level["layout"], alt)
             be = [x["bearing_err_deg"] for x in rows]
-            runs.append({"seed": seed, "r": r, "sse": sum(e2), "n": len(e2), "ticks": n_ticks, "bse": sum(v * v for v in be),
-                         "nb": len(be), "wrong": sum(abs(v) > doa_solve.WRONG_LOBE_DEG for v in be)})  # fmt: skip
-            if level["group"] == "nominal":
-                solves += [dict(x, seed=seed, r=r) for x in rows]
-    return dict(level, runs=runs, solves=solves)
+            run = {"seed": seed, "r": r, "ticks": n_ticks, "bse": sum(v * v for v in be), "nb": len(be),
+                   "wrong": sum(abs(v) > doa_solve.WRONG_LOBE_DEG for v in be), "win": {}}  # fmt: skip
+            for w in windows(d):
+                scored = [x for x in rows if "err_horiz_m" in x] if w == 0 else doa_solve.realtime_track(rows, w)
+                run["win"][str(w)] = {"sse": sum(x["err_horiz_m"] ** 2 for x in scored), "n": len(scored)}
+                if level["group"] == "nominal":
+                    solves[str(w)] += [{"seed": seed, "r": r, "range_km": x["range_km"], "err_horiz_m": x["err_horiz_m"],
+                                        "bearing_err_deg": x.get("bearing_err_deg")} for x in scored]  # fmt: skip
+            runs.append(run)
+    return dict(level, runs=runs, solves=solves if level["group"] == "nominal" else {})
 
 
 def system_a(exp: dict, seed_dirs: dict[int, str], jobs: int) -> dict | None:
@@ -117,8 +138,8 @@ def system_a(exp: dict, seed_dirs: dict[int, str], jobs: int) -> dict | None:
     for run, rows in zip(exp["runs"], all_rows):
         node = doa_solve.node_config(seed_dirs[run["seed"]], exp["doa"]["node"])
         pub = [x for x in rows if x.get("published") and x.get("err_horiz_m") is not None]
-        runs.append({"seed": run["seed"], "sse": sum(float(x["err_horiz_m"]) ** 2 for x in pub), "n": len(pub),
-                     "ticks": n_ticks})  # fmt: skip
+        sse = sum(float(x["err_horiz_m"]) ** 2 for x in pub)
+        runs.append({"seed": run["seed"], "ticks": n_ticks, "win": {"0": {"sse": sse, "n": len(pub)}}})
         for x in pub:
             e, n = doa_solve._en_m(node["rx_lat"], node["rx_lon"], x["true_lat"], x["true_lon"])
             solves.append({"seed": run["seed"], "range_km": round(((e * e + n * n) ** 0.5) / 1000.0, 3),
@@ -194,6 +215,6 @@ def run(exp: dict, args, repo: str, commit) -> None:
     with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     for row in summary:
-        print(f"{row['system']:>34}: RMSE {doa_report.fmt_m(row['pos_rmse_m'])}, median "
-              f"{doa_report.fmt_m(row.get('pos_median_m'))}, availability {row['availability']:.0%}")  # fmt: skip
+        print(f"{row['system']:>32} ({row['averaging']:>16}): RMSE {doa_report.fmt_m(row['pos_rmse_m'])}, "
+              f"availability {row['availability']:.0%}")  # fmt: skip
     print(f"Wrote {out}")

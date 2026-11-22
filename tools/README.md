@@ -406,3 +406,27 @@ About 3 minutes on 4 cores, plus about a minute for system A.
 | `paths_map.png` | the flights, towers and beam |
 | `results.json` | per-run error sums of every level (for `--reanalyze`) |
 | `seed-<n>\` | the recordings (and A's `analysis\offline_solves.csv`) |
+
+### Close range: `experiments/doa_near.json`
+
+The same comparison with every flight 3–10 km from the receiver (same
+south-west beam), 120 s long, 10 seeds:
+- **Altitude:** each flight's altitude follows its distance from YVR
+  (`altitude_model`: a 3 deg approach, 52.4 m/km, or an 8% climb-out,
+  80 m/km, drawn per flight).
+- **What B assumes:** one average profile (`doa.altitude_assumption`), since
+  it can't tell an arrival from a departure.
+- **Scoring:** B is scored each second and as a real-time system averaging
+  the last 10 and 20 s (`doa.tracking_windows_s`: a straight-line fit to the
+  solves so far, read at the newest).
+
+```
+..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\doa_near.json --out "C:\radar-runs\doa-near\$(Get-Date -Format yyyy-MM-dd_HHmmss)"
+```
+
+About 9 minutes on 4 cores (~5 with 8). Same files as above. Every table also
+has an `averaging` column, and there is one more figure:
+
+| File | Holds |
+|---|---|
+| `bearing_error.png` | how the nominal array's bearings are distributed (median and 95th percentile) |

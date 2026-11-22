@@ -1,0 +1,419 @@
+{
+  "name": "doa-near",
+  "description": "Direction-finding study, step 1a at close range: as doa_static (south-west beam, A = multistatic, B = CHAN-DT delay + 3-element array bearing) with every flight 3-10 km from the receiver, 120 s long, and its altitude following its distance from YVR (a 3 deg approach or an 8% climb-out). B assumes the average of the two profiles and is also scored as a real-time system averaging the last 10 and 20 s.",
+  "base": "doa_static.json",
+  "duration_s": 120,
+  "coverage": {
+    "beam_margin_deg": 10.0,
+    "min_range_km": 3.0,
+    "max_range_km": 10.0,
+    "max_bistatic_angle_deg": 150.0
+  },
+  "flight_ranges": {
+    "speed_ms": [
+      65.0,
+      100.0
+    ],
+    "alt_m": [
+      1000.0,
+      3000.0
+    ],
+    "turn_rate_deg_s": [
+      0.3,
+      1.5
+    ]
+  },
+  "altitude_model": {
+    "ref_lat": 49.1947,
+    "ref_lon": -123.1839,
+    "base_m": 4.0,
+    "gradients_m_per_km": [
+      52.4,
+      80.0
+    ]
+  },
+  "doa": {
+    "node": "synth-ubc-chan",
+    "array": {
+      "layout": "triangle",
+      "spacing_wl": 0.5,
+      "element0_deg": 0.0
+    },
+    "errors": {
+      "thermal": true,
+      "snr_offset_db": 0.0,
+      "phase_fixed_deg": 5.0,
+      "device_offset_deg": 0.0,
+      "phase_random_deg": 2.0,
+      "coupling_db": -20.0,
+      "multipath_db": -15.0,
+      "heading_deg": 1.0,
+      "tilt_deg": 1.0
+    },
+    "realisations": 20,
+    "bootstrap": 1000,
+    "targets_m": [
+      100,
+      200,
+      500
+    ],
+    "bearing_noise_deg": [
+      0.0,
+      0.05,
+      0.1,
+      0.2,
+      0.3,
+      0.5,
+      1.0,
+      2.0,
+      3.0,
+      5.0,
+      10.0
+    ],
+    "sweeps": {
+      "snr_offset_db": [
+        -10,
+        -5,
+        0,
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        35,
+        40
+      ],
+      "phase_fixed_deg": [
+        0.1,
+        0.25,
+        0.5,
+        1,
+        2,
+        5,
+        10,
+        20
+      ],
+      "device_offset_deg": [
+        0.25,
+        0.5,
+        1,
+        2,
+        5,
+        10,
+        20
+      ],
+      "phase_random_deg": [
+        0.1,
+        0.25,
+        0.5,
+        1,
+        2,
+        5,
+        10,
+        20
+      ],
+      "coupling_db": [
+        -45,
+        -40,
+        -35,
+        -30,
+        -25,
+        -20,
+        -15,
+        -10
+      ],
+      "multipath_db": [
+        -45,
+        -40,
+        -35,
+        -30,
+        -25,
+        -20,
+        -15,
+        -10,
+        -6
+      ],
+      "heading_deg": [
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1,
+        2,
+        5
+      ],
+      "tilt_deg": [
+        0.25,
+        0.5,
+        1,
+        2,
+        5,
+        10
+      ]
+    },
+    "altitude_assumption": {
+      "mode": "airport",
+      "ref_lat": 49.1947,
+      "ref_lon": -123.1839,
+      "base_m": 4.0,
+      "gradient_m_per_km": 66.2
+    },
+    "tracking_windows_s": [
+      10,
+      20
+    ]
+  },
+  "runs": [
+    {
+      "seed": 101,
+      "flight": "straight",
+      "plan": {
+        "lat": 49.182434,
+        "lon": -123.296141,
+        "alt_m": 665.61747,
+        "speed_ms": 82.685024,
+        "heading_deg": 340.173031,
+        "turn_rate_deg_s": 0.0,
+        "alt_ref_lat": 49.1947,
+        "alt_ref_lon": -123.1839,
+        "alt_base_m": 4.0,
+        "alt_gradient_m_per_km": 80.0
+      },
+      "fingerprint": {
+        "frames": 360,
+        "detections": 843,
+        "target_detections": 306,
+        "sum_delay_us": 19240.99,
+        "sum_doppler_hz": 2575.29,
+        "end_lat": 49.266283,
+        "end_lon": -123.342317
+      }
+    },
+    {
+      "seed": 202,
+      "flight": "straight",
+      "plan": {
+        "lat": 49.266506,
+        "lon": -123.303171,
+        "alt_m": 946.360396,
+        "speed_ms": 72.283394,
+        "heading_deg": 189.083665,
+        "turn_rate_deg_s": 0.0,
+        "alt_ref_lat": 49.1947,
+        "alt_ref_lon": -123.1839,
+        "alt_base_m": 4.0,
+        "alt_gradient_m_per_km": 80.0
+      },
+      "fingerprint": {
+        "frames": 360,
+        "detections": 815,
+        "target_detections": 305,
+        "sum_delay_us": 17181.06,
+        "sum_doppler_hz": -17085.82,
+        "end_lat": 49.189401,
+        "end_lon": -123.321994
+      }
+    },
+    {
+      "seed": 303,
+      "flight": "turn",
+      "plan": {
+        "lat": 49.247928,
+        "lon": -123.381321,
+        "alt_m": 816.798739,
+        "speed_ms": 69.367159,
+        "heading_deg": 77.312014,
+        "turn_rate_deg_s": 0.565451,
+        "alt_ref_lat": 49.1947,
+        "alt_ref_lon": -123.1839,
+        "alt_base_m": 4.0,
+        "alt_gradient_m_per_km": 52.4
+      },
+      "fingerprint": {
+        "frames": 360,
+        "detections": 784,
+        "target_detections": 310,
+        "sum_delay_us": 17441.45,
+        "sum_doppler_hz": 24719.55,
+        "end_lat": 49.222661,
+        "end_lon": -123.280651
+      }
+    },
+    {
+      "seed": 404,
+      "flight": "turn",
+      "plan": {
+        "lat": 49.26395,
+        "lon": -123.310143,
+        "alt_m": 961.758646,
+        "speed_ms": 79.856379,
+        "heading_deg": 116.038241,
+        "turn_rate_deg_s": 1.117577,
+        "alt_ref_lat": 49.1947,
+        "alt_ref_lon": -123.1839,
+        "alt_base_m": 4.0,
+        "alt_gradient_m_per_km": 80.0
+      },
+      "fingerprint": {
+        "frames": 360,
+        "detections": 863,
+        "target_detections": 312,
+        "sum_delay_us": 16421.01,
+        "sum_doppler_hz": -14065.25,
+        "end_lat": 49.196249,
+        "end_lon": -123.314623
+      }
+    },
+    {
+      "seed": 505,
+      "flight": "turn",
+      "plan": {
+        "lat": 49.250617,
+        "lon": -123.308874,
+        "alt_m": 884.125971,
+        "speed_ms": 69.908676,
+        "heading_deg": 265.832203,
+        "turn_rate_deg_s": -1.453364,
+        "alt_ref_lat": 49.1947,
+        "alt_ref_lon": -123.1839,
+        "alt_base_m": 4.0,
+        "alt_gradient_m_per_km": 80.0
+      },
+      "fingerprint": {
+        "frames": 360,
+        "detections": 777,
+        "target_detections": 302,
+        "sum_delay_us": 18269.48,
+        "sum_doppler_hz": -18403.95,
+        "end_lat": 49.201121,
+        "end_lon": -123.308084
+      }
+    },
+    {
+      "seed": 606,
+      "flight": "straight",
+      "plan": {
+        "lat": 49.272134,
+        "lon": -123.387519,
+        "alt_m": 1372.708296,
+        "speed_ms": 95.357907,
+        "heading_deg": 145.782997,
+        "turn_rate_deg_s": 0.0,
+        "alt_ref_lat": 49.1947,
+        "alt_ref_lon": -123.1839,
+        "alt_base_m": 4.0,
+        "alt_gradient_m_per_km": 80.0
+      },
+      "fingerprint": {
+        "frames": 360,
+        "detections": 777,
+        "target_detections": 311,
+        "sum_delay_us": 18900.45,
+        "sum_doppler_hz": 17377.19,
+        "end_lat": 49.187051,
+        "end_lon": -123.299317
+      }
+    },
+    {
+      "seed": 707,
+      "flight": "straight",
+      "plan": {
+        "lat": 49.205965,
+        "lon": -123.286083,
+        "alt_m": 398.52956,
+        "speed_ms": 84.505399,
+        "heading_deg": 315.454128,
+        "turn_rate_deg_s": 0.0,
+        "alt_ref_lat": 49.1947,
+        "alt_ref_lon": -123.1839,
+        "alt_base_m": 4.0,
+        "alt_gradient_m_per_km": 52.4
+      },
+      "fingerprint": {
+        "frames": 360,
+        "detections": 873,
+        "target_detections": 301,
+        "sum_delay_us": 19498.07,
+        "sum_doppler_hz": -21022.33,
+        "end_lat": 49.271014,
+        "end_lon": -123.383718
+      }
+    },
+    {
+      "seed": 808,
+      "flight": "turn",
+      "plan": {
+        "lat": 49.264327,
+        "lon": -123.383622,
+        "alt_m": 1319.179438,
+        "speed_ms": 77.141239,
+        "heading_deg": 164.909064,
+        "turn_rate_deg_s": -1.017234,
+        "alt_ref_lat": 49.1947,
+        "alt_ref_lon": -123.1839,
+        "alt_base_m": 4.0,
+        "alt_gradient_m_per_km": 80.0
+      },
+      "fingerprint": {
+        "frames": 360,
+        "detections": 853,
+        "target_detections": 298,
+        "sum_delay_us": 19557.51,
+        "sum_doppler_hz": 33973.27,
+        "end_lat": 49.247388,
+        "end_lon": -123.282449
+      }
+    },
+    {
+      "seed": 909,
+      "flight": "straight",
+      "plan": {
+        "lat": 49.258634,
+        "lon": -123.353617,
+        "alt_m": 749.540377,
+        "speed_ms": 74.06784,
+        "heading_deg": 152.424021,
+        "turn_rate_deg_s": 0.0,
+        "alt_ref_lat": 49.1947,
+        "alt_ref_lon": -123.1839,
+        "alt_base_m": 4.0,
+        "alt_gradient_m_per_km": 52.4
+      },
+      "fingerprint": {
+        "frames": 360,
+        "detections": 803,
+        "target_detections": 290,
+        "sum_delay_us": 18804.1,
+        "sum_doppler_hz": 1952.93,
+        "end_lat": 49.187821,
+        "end_lon": -123.297229
+      }
+    },
+    {
+      "seed": 1010,
+      "flight": "turn",
+      "plan": {
+        "lat": 49.216289,
+        "lon": -123.280172,
+        "alt_m": 595.568272,
+        "speed_ms": 87.924915,
+        "heading_deg": 13.706463,
+        "turn_rate_deg_s": -1.414829,
+        "alt_ref_lat": 49.1947,
+        "alt_ref_lon": -123.1839,
+        "alt_base_m": 4.0,
+        "alt_gradient_m_per_km": 80.0
+      },
+      "fingerprint": {
+        "frames": 360,
+        "detections": 811,
+        "target_detections": 309,
+        "sum_delay_us": 16697.18,
+        "sum_doppler_hz": -19676.97,
+        "end_lat": 49.237675,
+        "end_lon": -123.371844
+      }
+    }
+  ]
+}

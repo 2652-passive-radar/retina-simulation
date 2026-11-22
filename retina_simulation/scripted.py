@@ -20,7 +20,11 @@ from retina_simulation.world import (
     _bearing_deg,
     _haversine_km,
     _lla_to_enu,
+    profile_alt_km,
+    profile_climb_km_s,
 )
+
+_PROFILE_KEYS = ("alt_ref_lat", "alt_ref_lon", "alt_base_m", "alt_gradient_m_per_km")
 
 
 @dataclass
@@ -31,9 +35,27 @@ class FlightPlan:
     speed_ms: float
     heading_deg: float
     turn_rate_deg_s: float = 0.0
+    # Altitude profile: with a gradient, the altitude follows the distance from
+    # (alt_ref_lat, alt_ref_lon), alt = alt_base_m + gradient * distance (an
+    # approach or climb-out around an airport); alt_m is then the start
+    # altitude.  Gradient 0 flies level at alt_m.
+    alt_ref_lat: float = 0.0
+    alt_ref_lon: float = 0.0
+    alt_base_m: float = 0.0
+    alt_gradient_m_per_km: float = 0.0
 
     def to_dict(self) -> dict:
-        return {k: round(v, 6) for k, v in asdict(self).items()}
+        d = {k: round(v, 6) for k, v in asdict(self).items()}
+        if not self.alt_gradient_m_per_km:
+            for k in _PROFILE_KEYS:
+                d.pop(k)
+        return d
+
+    def profile(self) -> tuple | None:
+        """The world's alt_profile tuple (km units), or None for level flight."""
+        if not self.alt_gradient_m_per_km:
+            return None
+        return (self.alt_ref_lat, self.alt_ref_lon, self.alt_base_m / 1000.0, self.alt_gradient_m_per_km / 1000.0)
 
 
 @dataclass
@@ -59,11 +81,14 @@ def propagate(plan: FlightPlan, duration_s: float, dt: float = 1.0) -> list[tupl
     lat, lon, alt_km = plan.lat, plan.lon, plan.alt_m / 1000.0
     heading = plan.heading_deg
     speed = plan.speed_ms / 1000.0
+    prof = plan.profile()
     out = [(lat, lon, alt_km)]
     for _ in range(int(round(duration_s / dt))):
         ve = speed * math.sin(math.radians(heading))
         vn = speed * math.cos(math.radians(heading))
         lat, lon = _advance_latlon(lat, lon, alt_km, ve, vn, dt)
+        if prof:
+            alt_km = profile_alt_km(prof, lat, lon)
         heading = (heading + plan.turn_rate_deg_s * dt) % 360
         out.append((lat, lon, alt_km))
     return out
@@ -103,8 +128,15 @@ def sample_plan(
     cov: Coverage | None = None,
     ranges: FlightRanges | None = None,
     max_tries: int = 50_000,
+    alt_model: dict | None = None,
 ) -> FlightPlan:
-    """A flight of ``kind`` ("straight" or "turn") that stays covered throughout."""
+    """A flight of ``kind`` ("straight" or "turn") that stays covered throughout.
+
+    ``alt_model`` (an experiment's ``altitude_model``): instead of a level
+    altitude drawn from ``ranges.alt_m``, the flight's altitude follows its
+    distance from ``ref_lat``/``ref_lon``: ``base_m`` plus one of
+    ``gradients_m_per_km`` (drawn per flight, e.g. a 3 deg approach or a
+    climb-out)."""
     if kind not in ("straight", "turn"):
         raise ValueError(f"unknown flight kind {kind!r}")
     cov = cov or Coverage()
@@ -122,14 +154,17 @@ def sample_plan(
         turn = 0.0
         if kind == "turn":
             turn = rng.uniform(*ranges.turn_rate_deg_s) * rng.choice((-1.0, 1.0))
-        plan = FlightPlan(
-            lat=lat,
-            lon=lon,
-            alt_m=rng.uniform(*ranges.alt_m),
-            speed_ms=rng.uniform(*ranges.speed_ms),
-            heading_deg=rng.uniform(0.0, 360.0),
-            turn_rate_deg_s=turn,
-        )
+        alt_m = rng.uniform(*ranges.alt_m)
+        speed = rng.uniform(*ranges.speed_ms)
+        heading = rng.uniform(0.0, 360.0)
+        profile = {}
+        if alt_model:
+            grad = rng.choice(alt_model["gradients_m_per_km"])
+            profile = {"alt_ref_lat": alt_model["ref_lat"], "alt_ref_lon": alt_model["ref_lon"],
+                       "alt_base_m": alt_model["base_m"], "alt_gradient_m_per_km": grad}  # fmt: skip
+            alt_m = alt_model["base_m"] + grad * _haversine_km(alt_model["ref_lat"], alt_model["ref_lon"], lat, lon)
+        plan = FlightPlan(lat=lat, lon=lon, alt_m=alt_m, speed_ms=speed, heading_deg=heading, turn_rate_deg_s=turn,
+                          **profile)  # fmt: skip
         if path_covered(propagate(plan, duration_s), nodes, cov):
             return plan
     raise RuntimeError(f"no covered {kind} flight found for seed {seed} in {max_tries} tries")
@@ -138,6 +173,8 @@ def sample_plan(
 def aircraft_for(plan: FlightPlan, seed: int) -> SimulatedAircraft:
     """The plan as a world aircraft with ADS-B, never retired by the world."""
     speed = plan.speed_ms / 1000.0
+    ve, vn = speed * math.sin(math.radians(plan.heading_deg)), speed * math.cos(math.radians(plan.heading_deg))
+    prof = plan.profile()
     return SimulatedAircraft(
         object_id=f"flight-{seed}",
         lat=plan.lat,
@@ -145,7 +182,7 @@ def aircraft_for(plan: FlightPlan, seed: int) -> SimulatedAircraft:
         alt_km=plan.alt_m / 1000.0,
         vel_east=speed * math.sin(math.radians(plan.heading_deg)),
         vel_north=speed * math.cos(math.radians(plan.heading_deg)),
-        vel_up=0.0,
+        vel_up=profile_climb_km_s(prof, plan.lat, plan.lon, ve, vn) if prof else 0.0,
         heading_deg=plan.heading_deg,
         speed_km_s=speed,
         base_speed_km_s=speed,
@@ -154,4 +191,5 @@ def aircraft_for(plan: FlightPlan, seed: int) -> SimulatedAircraft:
         adsb_callsign=f"EXP{seed}",
         lifetime_s=1e9,
         turn_rate_deg_s=plan.turn_rate_deg_s,
+        alt_profile=prof,
     )

@@ -1105,3 +1105,145 @@ A separate strand from the receiver-motion work (branch `claude/doa-array-sim`).
   - bearing averaging over time (a simple tracker) to see how much of the
     gap it closes;
   - 4+ elements or longer integration.
+
+## Direction finding 1a, close range: B as a single-illuminator backup (2026-11-22)
+
+### Decided with you
+- B's purpose: a **backup when only one illuminator is available**.
+  - Coarser accuracy and shorter range are acceptable in exchange for the
+    simplicity.
+  - It still gives delay-Doppler data (to identify targets) and a bearing
+    good to a few degrees.
+  - Goal: find how accurate this cheap version can be made. The paper it
+    builds on showed bearings only, out to ~3 km, with no geolocation and no
+    error validation.
+- **Flights:**
+  - Within 10 km of the receiver, same south-west beam.
+  - Realistic altitude for traffic around YVR.
+  - Real-time averaging over 10 s and 20 s as variants of B.
+
+### Built
+- **Altitude profile for scripted flights** (`world.py`, `scripted.py`):
+  - A plan with `alt_gradient_m_per_km` flies at
+    alt = `alt_base_m` + gradient x distance from (`alt_ref_lat`,
+    `alt_ref_lon`).
+  - Its vertical speed is set every tick to match, so the echo's Doppler
+    carries the climb or descent.
+  - Level plans are unchanged (same dict format, same recordings; every
+    earlier fingerprint still reproduces).
+  - `sample_plan(..., alt_model=...)` draws one gradient per flight from the
+    experiment's `altitude_model`.
+- **`tools/doa_solve.py`:**
+  - `altitude_fn`: B's assumed altitude, either fixed or the airport model
+    (computed at the solved position inside the closed-form iteration).
+  - `realtime_track`: per second, a constant-velocity line fitted to the
+    solves of the last W seconds (that second included, none later), one
+    pass of outlier rejection, read at that second.
+- **Runner and report:**
+  - Every level is scored per second and for each `tracking_windows_s`.
+  - New "calibrated" level: fixed phase, device offset, coupling, heading
+    and tilt errors set to 0.
+  - `averaging` column in every table; `bearing_error.png`.
+  - Results files from before this change can't be `--reanalyze`d (format
+    changed).
+- **`experiments/doa_near.json`** (base doa_static):
+  - 120 s flights, 3–10 km from the receiver, speeds 65–100 m/s, turns
+    0.3–1.5 deg/s.
+  - YVR altitude model: base 4 m; 52.4 m/km (3 deg approach) or 80 m/km
+    (8% climb-out).
+  - B assumes 66.2 m/km (the average).
+  - 10 seeds (4 straight, 6 turning) x 20 bearing realisations; averaging
+    windows 10 and 20 s.
+  - Start altitudes 0.4–1.4 km.
+
+### Verified
+- `tests/test_doa.py` (+5):
+  - level plans keep their dict format;
+  - the world flies a profile flight on the profile (< 0.5 m), as
+    `propagate` predicts, and its vertical speed matches its climb each
+    second;
+  - `realtime_track` is exact on a noise-free straight line and never uses
+    later solves;
+  - true delay and bearing with the airport altitude model land within 2 m;
+  - doa_near flights stay 3–10 km out and reproduce their fingerprints.
+- Full suite 299 passed, 4 skipped; ruff clean.
+- doa_static re-run after the change: same B results as before.
+
+### Results (B only; A needs retina_geolocator)
+
+| B (triangle, 3 elements) | Each second | Real time, 10 s | Real time, 20 s |
+|---|---|---|---|
+| nominal errors | 790 m (median 433) | 553 m (median 328) | 487 m (median 291) |
+| fixed errors calibrated out | 626 m | 404 m | 319 m |
+| perfect array, airport altitude model | 22 m | 18 m | 33 m |
+| nominal, line array | 423 m | 345 m | 323 m |
+
+- Solves in 87% of seconds (85% with averaging); a 3-tower solve needs all
+  three channels.
+- Bearing (nominal array):
+  - RMS 6.0 deg; median 3.8 deg; 95% within 10.9 deg.
+  - Wrong-lobe rate 0.04%.
+- What each target needs (each term alone; per second / real time 20 s):
+
+  | Term | 200 m target | 500 m target |
+  |---|---|---|
+  | bearing error | 1.6 / 3.0 deg | 4.0 / 7.5 deg |
+  | SNR offset | +5.5 / -0.2 dB | -1.2 / -6.7 dB |
+  | fixed phase | 3.3 deg | 8.2 deg |
+  | heading | 1.5 deg | 3.8 deg |
+  | coupling | -17.6 dB | |
+  | multipath | -22 / -17 dB | -14 / -9 dB |
+  | random phase | 3.5 / 6.6 deg | 8.8 / 14.8 deg |
+  | RSPduo offset | 11 deg | |
+  | tilt | never within 10 deg | |
+
+### Findings
+1. **As a close-range backup, the 3-element triangle reaches ~0.5 km in real
+   time with nominal errors** (~0.3 km calibrated), and ~0.8 km per second.
+   That is about 5x better than at 11–34 km, because error ~ range x bearing
+   error and the SNR is higher up close.
+2. **Every requirement for 200–500 m is within reach of ordinary hardware**
+   (each term alone):
+   - phase calibration ~3 deg;
+   - heading ~1.5 deg;
+   - coupling below about -18 dB;
+   - multipath in the cell below about -17 to -22 dB;
+   - the simulator's SNR (or ~6 dB more for 200 m per second).
+
+   The far-range study needed 0.15 deg bearings.
+3. **Averaging over time removes the random part** (thermal noise, random
+   phase, multipath that changes each second): 790 -> 487 m.
+   - Fixed errors stay (calibration, coupling, heading): calibrating them
+     gives 487 -> 319 m.
+   - 20 s helps less than 10 s on turning flights. A straight-line fit lags
+     a turn: with a perfect array, 18 m at 10 s against 33 m at 20 s. A
+     proper tracker (Kalman filter, with Doppler) should do better than
+     both.
+4. **Altitude is not the limit here.** The airport altitude model costs
+   little (22 m against 20 m at the true altitude).
+   - This is optimistic: the simulated aircraft follow exactly the shape B
+     assumes, and only the gradient differs.
+   - Real traffic (level segments, go-arounds, VFR, helicopters) will cost
+     more.
+5. **Line vs triangle still matters:** the line halves the error per second
+   (423 m against 790 m).
+6. Throughout:
+   - each solve's bearing is accurate to a few degrees (median 3.8 deg);
+   - the delay-Doppler data identify the target;
+   - B solves more often than a 3-tower solve can.
+
+### Caveats
+- System A not run on these flights. Its default altitude layers start at
+  1.5 km, above all of these aircraft, so expect it to do worse here than its
+  82 m elsewhere unless lower layers are added.
+- Tracks are random headings with airport-shaped altitudes, not real
+  approach and departure routes.
+- The SNR model is still the placeholder (median 16.6 dB at these ranges).
+- One aircraft, perfect association, static receiver.
+
+### Next (not started; your go-ahead first)
+- Run on your machine for A.
+- A real tracker (delay, bearing and Doppler in a Kalman filter) in place of
+  the straight-line fit.
+- Measured SNR, and a measured array response once the hardware exists.
+- Optionally, realistic YVR routes (runway 08 finals, runway 26 departures).
