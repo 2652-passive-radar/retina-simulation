@@ -1007,7 +1007,8 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
   was solved as S, 9.4 km off).
 
 ### Open / later
-- v1 node contract: propose the optional per-frame field (issue, tag Josh).
+- v1 node contract: optional per-frame field proposed in
+  https://github.com/offworldlabs/retina-server/issues/753 (2026-11-26, Josh tagged).
 - The server keeps the old geolocator pinned (submodule → offworldlabs);
   the receiver Doppler model needs 813cbb9 upstream first.
 - Possible refinement: in an epoch-aligned solve, each node's receiver
