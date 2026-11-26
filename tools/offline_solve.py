@@ -23,7 +23,7 @@ What it does differently, and why it is optimistic
 
 Writes ``RUN/analysis/offline_solves.csv`` (``--receiver geometric``:
 ``offline_solves_geometric.csv``; ``--receiver geometric_doppler``:
-``offline_solves_geometric_doppler.csv``) with one row per tick.
+``offline_solves_geometric_doppler.csv``, and so on) with one row per tick.
 
 Usage::
 
@@ -65,7 +65,7 @@ DEFAULT_SOLVER = {
     "rx_doppler_passes": 1,
 }
 
-RECEIVER_MODES = ("stationary", "geometric", "geometric_doppler")
+RECEIVER_MODES = ("stationary", "geometric", "geometric_doppler", "geometric_doppler_model")
 
 FIELDS = [
     "t_ms", "t_s", "n_nodes", "published", "reason",
@@ -219,6 +219,19 @@ def _at_pose(nodes: list[dict], pose: dict) -> list[dict]:
     ]  # fmt: skip
 
 
+def _with_velocity(nodes: list[dict], pose: dict) -> list[dict]:
+    """Node configs carrying each receiver's velocity this tick, for a solver
+    that models the receiver's own Doppler (the rx_vel_* keys)."""
+    return [
+        dict(
+            n, rx_vel_east_ms=p["vel_east_ms"], rx_vel_north_ms=p["vel_north_ms"], rx_vel_up_ms=p.get("vel_up_ms", 0.0)
+        )
+        if (p := pose.get(n["node_id"]))
+        else n
+        for n in nodes
+    ]
+
+
 def _enu_to_ecef_vec(lat: float, lon: float, e: float, n: float, u: float) -> tuple[float, float, float]:
     phi, lam = math.radians(lat), math.radians(lon)
     sp, cp, sl, cl = math.sin(phi), math.cos(phi), math.sin(lam), math.cos(lam)
@@ -289,8 +302,11 @@ def solve_run(
     server does today; ``geometric`` (G), their true position that tick from
     rx_trajectory.ndjson, i.e. geometric compensation; ``geometric_doppler``
     (GD), G with each channel's receiver Doppler, computed from the receiver's
-    true velocity, removed from the measured Doppler.  On a recording without
-    receiver motion all three are identical.
+    true velocity, removed from the measured Doppler; ``geometric_doppler_model``,
+    GD done inside the solver instead (step 4a): each node config carries the
+    receiver's velocity (``rx_vel_*``) and retina_geolocator models the
+    receiver's own Doppler in one solve, as the server will.  On a recording
+    without receiver motion all four are identical.
 
     Each row also carries the receiver's offset from its registered position
     and, per node, ``bias_us_<node>``: how far the true bistatic delay that
@@ -387,6 +403,9 @@ def solve_run(
             res, guess, reason, corr = _solve_doppler_compensated(meas, _at_pose(nodes, used), used, cfg)
             for nid, f in corr.items():
                 row[f"rxdop_corr_hz_{_short(nid)}"] = round(f, 3)
+        elif receiver == "geometric_doppler_model" and used:
+            moved = _with_velocity(_at_pose(nodes, used), used)
+            res, guess, reason = solve_epoch(meas, {n["node_id"]: n for n in moved}, Geometry(moved), cfg)
         elif receiver != "stationary" and used:
             moved = _at_pose(nodes, used)
             res, guess, reason = solve_epoch(meas, {n["node_id"]: n for n in moved}, Geometry(moved), cfg)

@@ -119,3 +119,49 @@ def test_gd_is_deterministic(tmp_path):
     assert offline_solve.solve_run(d, receiver="geometric_doppler") == offline_solve.solve_run(
         d, receiver="geometric_doppler"
     )
+
+
+def _solver_models_receiver_doppler():
+    from retina_geolocator import multinode_solver
+
+    return hasattr(multinode_solver, "_rx_velocity_ms")
+
+
+_needs_model = pytest.mark.skipif(
+    not _solver_models_receiver_doppler(),
+    reason="this retina_geolocator does not model the receiver's own Doppler (rx_vel_* keys, step 4a)",
+)
+
+
+@_needs_model
+def test_solver_model_removes_the_receiver_doppler_noise_free(tmp_path):
+    d = _noise_free(_record(tmp_path, _VEHICLE_EAST, "vehicle"))
+    model = _solved(offline_solve.solve_run(d, receiver="geometric_doppler_model"))
+    assert _rmse([r["verr_horiz_ms"] for r in model]) < 0.5
+
+
+@_needs_model
+def test_solver_model_agrees_with_two_pass_gd(tmp_path):
+    d = _record(tmp_path, Motion("circle", speed_ms=15.0, lap_s=300.0), "circle")
+    two = {r["t_ms"]: r for r in _solved(offline_solve.solve_run(d, receiver="geometric_doppler"))}
+    one = {r["t_ms"]: r for r in _solved(offline_solve.solve_run(d, receiver="geometric_doppler_model"))}
+    common = [t for t in two if t in one]
+    assert len(common) > 0.95 * len(two)
+    dv = [
+        math.hypot(two[t]["est_vel_east_ms"] - one[t]["est_vel_east_ms"],
+                   two[t]["est_vel_north_ms"] - one[t]["est_vel_north_ms"])
+        for t in common
+    ]  # fmt: skip
+    assert sorted(dv)[int(0.95 * len(dv))] < 0.05
+    assert _rmse([one[t]["verr_horiz_ms"] for t in common]) == pytest.approx(
+        _rmse([two[t]["verr_horiz_ms"] for t in common]), abs=0.05
+    )
+
+
+@_needs_model
+def test_solver_model_on_a_static_receiver_equals_g(tmp_path):
+    d = _record(tmp_path, Motion(), "static")
+    keys = ("published", "reason", "est_lat", "est_lon", "est_alt_m", "est_vel_east_ms", "est_vel_north_ms")
+    g = offline_solve.solve_run(d, receiver="geometric")
+    model = offline_solve.solve_run(d, receiver="geometric_doppler_model")
+    assert [{k: r.get(k) for k in keys} for r in g] == [{k: r.get(k) for k in keys} for r in model]

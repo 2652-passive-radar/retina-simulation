@@ -7,6 +7,7 @@ retina_geolocator; matplotlib and shapely must be installed in it too)::
     python tools/run_experiment.py experiments/receiver_motion.json      # step 1 (see motion_experiment.py)
     python tools/run_experiment.py experiments/receiver_gnss.json        # step 3c (see gnss_experiment.py)
     python tools/run_experiment.py experiments/receiver_gnss_mc.json     # step 3d (see gnss_mc.py)
+    python tools/run_experiment.py experiments/receiver_system.json --backend-dir ../../backend  # step 4 (system_motion.py)
     python tools/run_experiment.py experiments/baseline_static.json --system --backend-dir ../../backend
 
 Default (about a minute): records each seed without a server, solves it
@@ -108,7 +109,9 @@ def _backend_busy() -> bool:
         return False
 
 
-def _run_system_seed(exp: dict, run: dict, sys_dir: str, backend_dir: str, backend_python: str) -> None:
+def _run_system_seed(
+    exp: dict, run: dict, sys_dir: str, backend_dir: str, backend_python: str, extra_args: tuple = ()
+) -> None:
     env = dict(
         os.environ,
         RETINA_ENV="dev",
@@ -137,6 +140,7 @@ def _run_system_seed(exp: dict, run: dict, sys_dir: str, backend_dir: str, backe
                     "--duration", str(exp["duration_s"]),
                     "--record", sys_dir,
                     "--validation-url", _BACKEND_URL,
+                    *extra_args,
                 ],
                 cwd=_REPO,
                 env=env,
@@ -171,6 +175,11 @@ def main() -> None:
     args = parser.parse_args()
 
     exp = experiment.load(args.experiment)
+    if "system_cases" in exp:
+        import system_motion
+
+        system_motion.run(exp, args, _REPO, _commit)
+        return
     if "sweeps" in exp:
         import gnss_mc
 

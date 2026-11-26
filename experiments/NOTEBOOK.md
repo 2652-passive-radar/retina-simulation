@@ -925,6 +925,98 @@ receiver velocity error shifts a 521 MHz channel's Doppler by the radar's own
   - Thresholds are relative to a +-200 Hz Doppler / 2 Hz noise radar and these
     5 motion cases. The oscillating vehicle (the hardest manoeuvre) binds.
 
+## Step 4: moving-receiver compensation in the system (2026-11-25)
+
+### Decided with you
+- Moved ahead of the multi-epoch work, to merge the compensation into the
+  main pipeline. Receiver KF kept as is (3b CV model).
+- Offworld Labs (Jehan, by email): each detection frame may carry the
+  receiver's position and motion as an optional field, null for stationary
+  nodes; the GNSS filtering runs on the node; contributions by PR or GitHub
+  issue, tagging Josh Poole. Suggested GNSS over GPIO + PPS, disciplining the
+  Pi's clock.
+- This step: our own repos only (2652-passive-radar forks), the simulator's
+  TCP path; the v1 node-contract field goes to an issue first.
+
+### Built
+- **retina-geolocator** (`claude/ecstatic-tesla-p8j8rz`, 813cbb9):
+  `solve_multinode` models the receiver's own Doppler,
+  (fc/c)(u_RP + u_TR).v_R, when a node config carries `rx_vel_east_ms`,
+  `rx_vel_north_ms`, `rx_vel_up_ms` (pinned and free-altitude residuals,
+  analytic Jacobians, rms_doppler). One solve instead of the offline two-pass
+  GD. Absent/zero velocity = stationary, solved exactly as before.
+  `fit_constant_velocity` still assumes stationary receivers (documented).
+- **retina-server** (`claude/ecstatic-tesla-p8j8rz`, 9a4e4f4):
+  `services/receiver_motion.py`. A TCP frame may carry `rx_motion` (lat, lon,
+  alt_m, ENU velocity at the frame's timestamp). Filed per node on ingest,
+  before the rate limit; every solve path (solver_pool's solve, multistart and
+  consensus wrappers, and the gates in `_process_solver_item`) places a moving
+  receiver at its pose for the solve's epoch (interpolated; up to 3 s
+  extrapolated by its velocity) with `rx_vel_*`. A moving node with no pose
+  near the epoch is left out of that solve. The constant-velocity fit is
+  skipped for inputs with a moving node (n=2 left unconfirmed). Counters
+  `rx_motion_rejected/applied/stale`, `cv_fit_skipped_moving_rx` in the solver
+  stats. Full server test suite passes; pre-commit clean.
+- **retina-simulation**:
+  - `offline_solve --receiver geometric_doppler_model`: GD through the
+    solver's model (as the server does it);
+  - orchestrator `--receiver-motion` and `--rx-pose truth|none|<estimates
+    file>`: receivers move during a real-time system run and each frame
+    carries `rx_motion`;
+  - `tools/system_motion.py` + `experiments/receiver_system.json`: each case
+    through a fresh backend, for each pose source, then the same recording
+    solved offline with what the server was told.
+
+### Verified
+- Geolocator: receiver term matches first-principles Doppler (finite
+  difference, both moving); analytic Jacobian = numerical (pinned, free);
+  noise-free recovery with a moving receiver; stationary unchanged (8 tests).
+- One-solve vs two-pass GD on 5 cases x 5 seeds (truth and KF pose): identical
+  RMSE and publish counts; 95% of ticks within 0.3 m and 0.01 m/s.
+- Server: pose parsing/rejection, interpolation, extrapolation limit, stale
+  node dropped, stationary configs untouched, and a pool solve that removes a
+  moving receiver's Doppler (11 tests).
+
+### Results: system run (seed 101, 300 s each, server 3-node solves, from 30 s)
+
+| Case | Pose sent | Server solves | Median position | Median velocity | Offline RMSE (same frames) |
+|---|---|---|---|---|---|
+| static | none | 12 | 65 m | 2.3 m/s | 70 m, 3.2 m/s |
+| linear-east-vehicle | none | 13 | 4,049 m | 21.2 m/s | 4,964 m, 33.7 m/s |
+| | truth | 8 | 52 m | 1.7 m/s | 72 m, 3.5 m/s |
+| | KF | 8 | 78 m | 3.5 m/s | 72 m, 3.5 m/s |
+| oscillate-vehicle | none | 9 | 298 m | 7.2 m/s | 229 m, 8.4 m/s |
+| | truth | 11 | 58 m | 1.9 m/s | 72 m, 3.2 m/s |
+| | KF | 12 | 86 m | 1.7 m/s | 66 m, 3.3 m/s |
+| circle-vehicle | none | 11 | 621 m | 9.4 m/s | 902 m, 12.0 m/s |
+| | truth | 14 | 58 m | 1.6 m/s | 70 m, 3.2 m/s |
+| | KF | 12 | 85 m | 2.3 m/s | 68 m, 3.3 m/s |
+
+- **With the pose sent, the server is back at the static baseline**; without
+  it, 0.3-4 km and 7-21 m/s.
+- **The server computes what the offline solve computes**: on server solves
+  paired with an offline solve of the same tick (5-10 per run), the median
+  difference is 0.0-0.6 m and 0.03-0.2 m/s (12-13 m in two runs, still small
+  against the ~60 m error).
+- Server velocity RMSE (6.4-6.8 m/s in the turning cases) is set by one
+  outlier per run (20-21 m/s, from measurements 1-2 s apart that the server
+  aligned or adopted, as seen in step 0c); medians are 1.6-2.3 m/s. 7-14
+  solves per run, one seed: small numbers.
+- Fixed in the analysis: the real-time run records one tick past the last KF
+  estimate; that tick has no pose and is now left out of the offline solve (it
+  was solved as S, 9.4 km off).
+
+### Open / later
+- v1 node contract: propose the optional per-frame field (issue, tag Josh).
+- The server keeps the old geolocator pinned (submodule → offworldlabs);
+  the receiver Doppler model needs 813cbb9 upstream first.
+- Possible refinement: in an epoch-aligned solve, each node's receiver
+  velocity at its own measurement time (positions at the aligned epoch). Not
+  needed for these results (< 1 m/s effect at these accelerations).
+- Moving receivers on real hardware: the beam turns with the vehicle (the
+  simulation held it fixed in the world); stationary clutter gains Doppler
+  (blah2's zero-Doppler cancellation assumes a still receiver).
+
 ### Next (not started)
 - Possible: GNSS-reported (Doppler) velocity as a KF measurement, H = [[1 0 1],
   [0 1 0]], sigma_vel ~0.05 m/s (deferred 2026-11-13).

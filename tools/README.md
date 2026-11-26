@@ -83,11 +83,13 @@ load one:
 
 ```python
 import numpy as np, sys
+
 sys.path.insert(0, "tools")
 from render_maps import with_noise
+
 z = np.load("runs/ubc-1/maps/maps_000.npz")
-map_db = with_noise(z["signal"][0])   # what the radar would show, in dB
-labels = z["instance"][0]             # 0 = background, k = k-th target in index.json
+map_db = with_noise(z["signal"][0])  # what the radar would show, in dB
+labels = z["instance"][0]  # 0 = background, k = k-th target in index.json
 ```
 
 `tools\view_maps.py` saves PNGs to `maps\png\` to look at. Each image shows
@@ -366,3 +368,23 @@ figures from whatever levels are complete. Output:
 | `levels.csv` | per level and case: % increases with intervals, receiver error GD was given, KF coverage and mean NIS |
 | `screening.csv` | stage A: the KF alone, 8 realisations per level, case and seed |
 | `cases\<case>\doppler-on\seed-<n>\analysis\offline_solves_gd_mc_<level>_r<k>.csv` | every solve |
+
+## Step 4: moving receivers through the server (system run)
+
+`experiments/receiver_system.json` flies each `system_cases` case and
+`system_seeds` seed through a fresh backend in real time, once per
+`system_pose_sources` (`none`: the receiver moves but reports nothing;
+`truth`; `kf`: the step 3b estimate), with each frame carrying `rx_motion`.
+Needs a backend with the receiver-motion change (retina-server branch) and a
+retina-geolocator that models the receiver's Doppler.
+
+```
+cd "$root\libs\retina-simulation"
+..\..\backend\.venv\Scripts\python.exe tools\run_experiment.py experiments\receiver_system.json --backend-dir ..\..\backend --out "C:\radar-runs\receiver-system\$(Get-Date -Format yyyy-MM-dd_HHmmss)"
+```
+
+About 6 minutes per run (10 runs: ~1 hour). A finished run is skipped when
+started again with the same `--out`; `--reanalyze <folder>` rebuilds the
+table. Output: `summary.csv` (server 3-node solves and the offline solve of
+the same recording, RMSE, and the paired per-tick differences) and each run's
+`cases\<case>\seed-<n>\system_<pose>\` recording and analysis.

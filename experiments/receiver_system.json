@@ -1,0 +1,9 @@
+{
+  "name": "receiver-system",
+  "description": "Step 4 of the receiver-motion study: moving receivers through the real server. Each frame carries rx_motion (the true receiver pose, the step 3b KF estimate, or none), the server places the receiver there and models its own Doppler in the solver (retina-geolocator rx_vel_*). Each run is also solved offline from its own recording with what the server was told, for a like-for-like comparison.",
+  "base": "receiver_gnss.json",
+  "system_cases": ["static", "linear-east-vehicle", "oscillate-vehicle", "circle-vehicle"],
+  "system_seeds": [101],
+  "system_pose_sources": ["none", "truth", "kf"],
+  "system_realisation": 0
+}

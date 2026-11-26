@@ -42,12 +42,14 @@ from retina_simulation.generator import (
     generate_fleet,
 )
 from retina_simulation.live_adsb import LiveAdsbClient
+from retina_simulation.motion import motion_from, place_receivers
 from retina_simulation.recorder import RunRecorder, fetch_solves
 from retina_simulation.tower_resolver import apply_tower_assignments, resolve_towers
 from retina_simulation.world import (
     MetroCell,
     NodeConfig,
     SimulationWorld,
+    _enu_to_lla,
     waypoints_for_metro,
 )
 
@@ -294,6 +296,16 @@ class FleetOrchestrator:
         self.withhold_adsb = False
         # Set under --experiment: the recording also carries the receiver pose.
         self.record_receiver = False
+        # Set under --receiver-motion: every receiver moves along this one
+        # trajectory (motion.Motion) from its registered (lat, lon, alt_km),
+        # and each frame carries rx_motion, the receiver pose the server
+        # solves with: the true one, or under --rx-pose-file a GNSS-based
+        # estimate ({t_s: estimate}, offsets from the registered position);
+        # "none" sends no pose at all (a server that does not know).
+        self.receiver_motion = None
+        self.receiver_origins: dict[str, tuple[float, float, float]] = {}
+        self.rx_pose_estimates: dict[float, dict] | None = None
+        self.send_rx_motion = True
         # Auto-reconnect state: per-node earliest-retry timestamp and attempt count
         self._reconnect_next: dict[str, float] = {}
         self._reconnect_attempts: dict[str, int] = {}
@@ -584,20 +596,26 @@ class FleetOrchestrator:
             n_nodes / self.frame_interval,
         )
 
+        sim_t = 0.0
         try:
             while self._running:
                 loop_start = time.monotonic()
 
                 # Advance the simulation world by one tick
                 self.world.step(tick_dt * self.time_scale, mode=self.mode)
+                sim_t += tick_dt * self.time_scale
                 timestamp_ms = int(time.time() * 1000)
+                offset = (0.0, 0.0)
+                if self.receiver_motion is not None:
+                    de, dn, _, _ = place_receivers(self.world, self.receiver_origins, self.receiver_motion, sim_t)
+                    offset = (de, dn)
 
                 # Record ground truth on every world step
                 self._record_ground_truth(timestamp_ms)
                 if self.recorder:
                     self.recorder.truth(timestamp_ms, self.world.aircraft)
                     if self.record_receiver:
-                        self.recorder.receiver(timestamp_ms, experiment.receiver_pose(self.world))
+                        self.recorder.receiver(timestamp_ms, experiment.receiver_pose(self.world, offset))
 
                 # Send frames only to nodes whose per-node cooldown has elapsed
                 now_t = time.monotonic()
@@ -609,6 +627,8 @@ class FleetOrchestrator:
                         continue
                     labels = [] if self.recorder else None
                     frame = self.world.generate_detections_for_node(node_id, timestamp_ms, labels=labels)
+                    if self.receiver_motion is not None and self.send_rx_motion:
+                        frame["rx_motion"] = self._rx_motion(node_id, sim_t)
                     if frame.get("delay"):  # only send non-empty frames
                         wire = {k: v for k, v in frame.items() if k != "adsb"} if self.withhold_adsb else frame
                         send_tasks.append(self._send_frame_to_node(node_id, wire))
@@ -656,6 +676,29 @@ class FleetOrchestrator:
             log.info("Simulation loop cancelled")
         finally:
             self._running = False
+
+    def _rx_motion(self, node_id: str, sim_t: float) -> dict | None:
+        """The receiver pose a moving node reports with its frame: the true
+        one, or the GNSS-based estimate for this tick (None before the first
+        fix has arrived)."""
+        if self.rx_pose_estimates is None:
+            pose = experiment.receiver_pose(self.world)[node_id]
+            return {k: pose[k] for k in ("lat", "lon", "alt_m", "vel_east_ms", "vel_north_ms", "vel_up_ms")}
+        est = self.rx_pose_estimates.get(round(sim_t, 3))
+        if est is None:
+            return None
+        lat0, lon0, alt0_km = self.receiver_origins[node_id]
+        lat, lon, alt_km = _enu_to_lla(
+            est["east_m"] / 1000.0, est["north_m"] / 1000.0, est["up_m"] / 1000.0, lat0, lon0, alt0_km
+        )
+        return {
+            "lat": round(lat, 8),
+            "lon": round(lon, 8),
+            "alt_m": round(alt_km * 1000.0, 2),
+            "vel_east_ms": round(est["vel_east_ms"], 4),
+            "vel_north_ms": round(est["vel_north_ms"], 4),
+            "vel_up_ms": round(est["vel_up_ms"], 4),
+        }
 
     async def stop(self):
         """Gracefully disconnect all nodes."""
@@ -1387,6 +1430,19 @@ async def main_async(args):
         orchestrator.withhold_adsb = True
         orchestrator.record_receiver = True
         log.info("Experiment %s, seed %d: one scripted %s flight", exp["name"], run["seed"], run["flight"])
+        if args.receiver_motion:
+            orchestrator.receiver_motion = motion_from(json.loads(args.receiver_motion))
+            orchestrator.receiver_origins = {
+                nid: (n.rx_lat, n.rx_lon, n.rx_alt_ft * 0.3048 / 1000.0) for nid, n in world.nodes.items()
+            }
+            world.rx_doppler = True
+            if args.rx_pose == "none":
+                orchestrator.send_rx_motion = False
+            elif args.rx_pose != "truth":
+                with open(args.rx_pose, encoding="utf-8") as f:
+                    ests = [json.loads(line) for line in f if line.strip()]
+                orchestrator.rx_pose_estimates = {round(e["t_s"], 3): e for e in ests}
+            log.info("Receivers move: %s; pose sent: %s", args.receiver_motion, args.rx_pose)
 
     if args.record:
         orchestrator.recorder = RunRecorder(args.record, all_nodes)
@@ -1611,6 +1667,16 @@ def main():
         "as --config. Implies --adsb-truth-only.",
     )
     parser.add_argument("--experiment-seed", type=int, default=0, help="Which run of --experiment to fly")
+    parser.add_argument(
+        "--receiver-motion",
+        help="With --experiment: move every receiver along this motion (JSON, as an experiment case's 'motion')",
+    )
+    parser.add_argument(
+        "--rx-pose",
+        default="truth",
+        help="With --receiver-motion: the receiver pose each frame reports as rx_motion: 'truth', 'none' (no "
+        "pose sent), or an ndjson file of per-tick estimates (t_s, east_m, north_m, up_m, vel_*_ms)",
+    )
     parser.add_argument(
         "--record",
         type=str,
